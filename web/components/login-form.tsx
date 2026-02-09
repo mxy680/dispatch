@@ -14,15 +14,19 @@ export function LoginForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const supabase = createClient();
+// for testing skip the formating for now
+  // const formatPhone = (value: string) => {
+  //   const digits = value.replace(/\D/g, "");
+  //   if (!digits.startsWith("1") && digits.length > 0) {
+  //     return "+1" + digits;
+  //   }
+  //   return "+" + digits;
+  // };
 
   const formatPhone = (value: string) => {
     const digits = value.replace(/\D/g, "");
-    if (!digits.startsWith("1") && digits.length > 0) {
-      return "+1" + digits;
-    }
-    return "+" + digits;
+return digits
   };
-
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -49,21 +53,28 @@ export function LoginForm() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-
-    const { error } = await supabase.auth.verifyOtp({
-      phone,
+  
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone, // Ensure this still has the "+" if needed
       token: otp,
       type: "sms",
     });
-
-    setLoading(false);
-
+  
     if (error) {
+      setLoading(false);
       setError(error.message);
       return;
     }
-
-    router.push("/dashboard");
+  
+    if (data.session) {
+      // 1. Sync server-side state with the new cookie
+      router.refresh(); 
+      
+      // 2. Use a slight delay to let the refresh complete
+      setTimeout(() => {
+        router.push("/dashboard");
+      }, 150);
+    }
   };
 
   return (

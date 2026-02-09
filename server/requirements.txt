@@ -1,3 +1,9 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart          # Required for file uploads
+faster-whisper            # The local transcription engine
+supabase                  # To validate the user's token
+python-dotenv             # To load the service role key

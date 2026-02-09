@@ -1,5 +1,7 @@
+// web/app/dashboard/page.tsx
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { VoiceRecorder } from "@/components/voice-recorder";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -10,21 +12,22 @@ export default async function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
-      <div className="bg-dark-card border border-dark-border rounded-lg p-8 max-w-md w-full">
-        <h1 className="text-2xl font-semibold mb-4">Dashboard</h1>
-        <p className="text-gray-400 mb-4">
-          Signed in as: {user.phone}
+    <main className="min-h-screen bg-dark-bg p-4 flex flex-col items-center justify-center gap-8">
+      <div className="text-center space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight">CallStack Agent</h1>
+        <p className="text-gray-400">
+          Orchestrating as <span className="text-supabase-green font-mono">{user.phone}</span>
         </p>
-        <form action="/auth/signout" method="post">
-          <button
-            type="submit"
-            className="w-full py-3 bg-dark-border text-white font-medium rounded-md hover:bg-gray-600 transition-colors"
-          >
-            Sign Out
-          </button>
-        </form>
       </div>
+
+      <VoiceRecorder />
+      
+      {/* Sign Out (Keep this for convenience) */}
+      <form action="/auth/signout" method="post" className="mt-8">
+        <button className="text-sm text-gray-500 hover:text-white transition-colors">
+          Sign Out
+        </button>
+      </form>
     </main>
   );
 }
