@@ -2,3 +2,4 @@ server/.env
 server/test.mp3
 web/package-lock.json
 web/package-lock.json
+server/__pychache__/
