@@ -8,6 +8,9 @@ from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from supabase import create_client, Client
+from database import models
+from pydantic import BaseModel
+from typing import Union
 
 
 app = FastAPI(title="CallStack API")
@@ -21,6 +24,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request/Response Models
+class CreateProjectRequest(BaseModel):
+    user_id: str
+    name: str
+    file_path: str = None
+
+class CreateTaskRequest(BaseModel):
+    project_id: str
+    description: str
+
+class UpdateTaskRequest(BaseModel):
+    status: str  # pending, in_progress, completed
 
 @app.get("/")
 async def root():
@@ -40,7 +55,7 @@ model = WhisperModel("tiny", device="cpu", compute_type="int8")
 print("Whisper model loaded!")
 
 # --- 2. Security Dependency ---
-def get_current_user(authorization: Annotated[str | None, Header()] = None):
+def get_current_user(authorization: Annotated[Union[str, None], Header()] = None):
     """
     Validates the Supabase JWT sent in the 'Authorization' header.
     Returns the user object if valid, raises 401 if not.
@@ -101,6 +116,60 @@ async def transcribe_audio(
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
+    # ==================== DATABASE ENDPOINTS ====================
+
+@app.get("/api/projects/{user_id}")
+async def get_user_projects(user_id: str):
+    """Get all projects for a user"""
+    try:
+        projects = models.get_user_projects(user_id)
+        return {"success": True, "projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/projects")
+async def create_project(request: CreateProjectRequest):
+    """Create a new project"""
+    try:
+        project_id = models.create_project(
+            user_id=request.user_id,
+            name=request.name,
+            file_path=request.file_path
+        )
+        return {"success": True, "project_id": project_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/projects/{project_id}/tasks")
+async def get_project_tasks(project_id: str):
+    """Get all tasks for a project"""
+    try:
+        tasks = models.get_project_tasks(project_id)
+        return {"success": True, "tasks": tasks}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tasks")
+async def create_task(request: CreateTaskRequest):
+    """Create a new task"""
+    try:
+        task_id = models.create_task(
+            project_id=request.project_id,
+            description=request.description
+        )
+        return {"success": True, "task_id": task_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, request: UpdateTaskRequest):
+    """Update task status"""
+    try:
+        models.update_task_status(task_id, request.status)
+        return {"success": True, "message": "Task updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 async def root():
