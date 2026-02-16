@@ -3,3 +3,7 @@ server/test.mp3
 web/package-lock.json
 web/package-lock.json
 server/__pychache__/
+web/package-lock.json
+server/.DS_Store
+/server/database/__pycache__
+/server/services/__pycache__
