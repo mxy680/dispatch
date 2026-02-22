@@ -16,7 +16,7 @@ export default async function DashboardPage() {
       <div className="text-center space-y-2">
         <h1 className="text-4xl font-bold tracking-tight">CallStack</h1>
         <p className="text-gray-400">
-          Connected as <span className="text-supabase-green font-mono">{user.phone}</span>
+          Connected as <span className="text-supabase-green font-mono">{user.phone || user.email}</span>
         </p>
       </div>
 
