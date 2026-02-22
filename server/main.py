@@ -63,7 +63,6 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
             token = authorization.split(" ")[1]
         else:
             token = authorization
-        token = authorization.split(" ")[1]
         supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
         user_response = supabase.auth.get_user(token)
         return user_response.user
@@ -125,8 +124,32 @@ async def transcribe_audio(
         
         # --- HANDLER: CREATE TASK ---
         elif intent_data.get("intent") == "create_task":
-            # (Future ticket: Logic to find project_id from name goes here)
-            pass
+            project_name = intent_data.get("project_name")
+            task_description = intent_data.get("task_description")
+            if project_name and task_description:
+                project = models.get_project_by_name(user.id, project_name)
+                if project:
+                    models.create_task(project["id"], task_description, voice_command=transcript_text)
+                    action_result = f"Created task '{task_description}' in project '{project_name}'."
+                else:
+                    action_result = f"Could not find a project named '{project_name}'."
+            else:
+                action_result = "I couldn't determine the project or task from your command."
+
+        # --- HANDLER: STATUS CHECK ---
+        elif intent_data.get("intent") == "status_check":
+            projects_with_counts = models.get_user_projects_with_task_counts(user.id)
+            if not projects_with_counts:
+                action_result = "You don't have any projects yet. Try saying 'create a project called my-app'."
+            else:
+                lines = [f"You have {len(projects_with_counts)} project(s):"]
+                for p in projects_with_counts:
+                    total = p["total_tasks"] or 0
+                    pending = p["pending_tasks"] or 0
+                    in_prog = p["in_progress_tasks"] or 0
+                    done = p["completed_tasks"] or 0
+                    lines.append(f"  '{p['name']}' — {total} task(s) ({pending} pending, {in_prog} in progress, {done} done)")
+                action_result = "\n".join(lines)
 
         return {
             "status": "success",

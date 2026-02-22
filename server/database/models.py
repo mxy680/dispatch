@@ -38,16 +38,48 @@ def get_project_by_id(project_id):
     conn.close()
     return dict(project) if project else None
 
+def get_project_by_name(user_id, name):
+    """Find a project by name (case-insensitive) for a specific user."""
+    conn = get_db_connection()
+    project = conn.execute(
+        "SELECT * FROM projects WHERE user_id = ? AND LOWER(name) = LOWER(?)",
+        (user_id, name)
+    ).fetchone()
+    conn.close()
+    return dict(project) if project else None
+
+def get_user_projects_with_task_counts(user_id):
+    """Get all projects for a user with counts of tasks by status."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            p.id, p.name, p.status,
+            COUNT(t.id) as total_tasks,
+            SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) as pending_tasks,
+            SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) as in_progress_tasks,
+            SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed_tasks
+        FROM projects p
+        LEFT JOIN tasks t ON p.id = t.project_id
+        WHERE p.user_id = ?
+        GROUP BY p.id
+        ORDER BY p.last_accessed DESC
+        """,
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
 # ==================== TASKS ====================
 
-def create_task(project_id, description):
+def create_task(project_id, description, voice_command=None):
     """Create a new task for a project."""
     conn = get_db_connection()
     task_id = str(uuid.uuid4())
-    
+
     conn.execute(
-        "INSERT INTO tasks (id, project_id, description) VALUES (?, ?, ?)",
-        (task_id, project_id, description)
+        "INSERT INTO tasks (id, project_id, description, voice_command) VALUES (?, ?, ?, ?)",
+        (task_id, project_id, description, voice_command)
     )
     conn.commit()
     conn.close()
