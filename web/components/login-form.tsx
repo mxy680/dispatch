@@ -99,7 +99,7 @@ return digits
         <h1 className="text-2xl font-semibold text-center mb-2">CallStack</h1>
         <p className="text-gray-400 text-center text-sm mb-8">
           {step === "phone"
-            ? "Enter your phone number to sign in"
+            ? "Sign in to continue"
             : "Enter the code sent to your phone"}
         </p>
 
