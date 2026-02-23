@@ -1,11 +1,19 @@
 import os
 import shutil
+import json
 from typing import Annotated, Union
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from supabase import create_client, Client
 from pydantic import BaseModel
+
+# NEW: load server/.env when running locally (uvicorn doesn't auto-load it)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception as e:
+    print(f"[ENV] python-dotenv not available or failed to load: {e!r}")
 
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
 
@@ -20,6 +28,7 @@ app = FastAPI(title="CallStack API")
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE} SUPABASE_URL_set={bool(SUPABASE_URL)} SUPABASE_SERVICE_KEY_set={bool(SUPABASE_SERVICE_KEY)}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,31 +53,45 @@ print("Whisper model loaded!")
 def get_current_user(authorization: Annotated[Union[str, None], Header()] = None):
     """
     Validates the Supabase JWT. Returns the Supabase User object.
+    In DEVELOPMENT_MODE: if a JWT is provided, use it; otherwise fall back to a mock user.
     """
+    # If a real token is present, always honor it (even in dev mode)
+    has_auth = bool(authorization)
+    print(f"[AUTH] DEVELOPMENT_MODE={DEVELOPMENT_MODE} has_auth={has_auth}")
 
-        # BYPASS AUTH IN DEVELOPMENT
+    if has_auth:
+        # If client sent a JWT, we must be able to validate it. Otherwise fail loudly.
+        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="Supabase server env not configured (SUPABASE_URL/SUPABASE_SERVICE_KEY). Check server/.env loading.",
+            )
+
+        try:
+            if " " in authorization:
+                token = authorization.split(" ")[1]
+            else:
+                token = authorization
+            supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+            user_response = supabase.auth.get_user(token)
+            u = user_response.user
+            print(f"[AUTH] Using Supabase user id={getattr(u, 'id', None)} email={getattr(u, 'email', None)}")
+            return u
+        except Exception as e:
+            print(f"[AUTH] Supabase auth failed err={e!r}")
+            raise HTTPException(status_code=401, detail="Invalid or Expired Token")
+
+    # No token (or token invalid in dev): allow mock user only in dev mode
     if DEVELOPMENT_MODE:
         class MockUser:
-            id = "test-user-123"
-            email = "test@example.com"
-            phone = "+15551234567"
-        return MockUser()
+            id = os.environ.get("DEV_USER_ID", "test-user-123")
+            email = os.environ.get("DEV_USER_EMAIL", "test@example.com")
+            phone = os.environ.get("DEV_USER_PHONE", "+15551234567")
+        mu = MockUser()
+        print(f"[AUTH] Falling back to MockUser id={mu.id} email={mu.email}")
+        return mu
 
-
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization Header")
-    
-    try:
-        if " " in authorization:
-            token = authorization.split(" ")[1]
-        else:
-            token = authorization
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-        user_response = supabase.auth.get_user(token)
-        return user_response.user
-    except Exception as e:
-        print(f"Auth Error: {e}")
-        raise HTTPException(status_code=401, detail="Invalid or Expired Token")
+    raise HTTPException(status_code=401, detail="Missing Authorization Header")
 
 # --- 4. REQUEST MODELS ---
 class CreateProjectRequest(BaseModel):
@@ -79,6 +102,8 @@ class CreateProjectRequest(BaseModel):
 class CreateTaskRequest(BaseModel):
     project_id: str
     description: str
+    # allow client/dashboard-created tasks to attach user_id explicitly
+    user_id: str | None = None
 
 class UpdateTaskRequest(BaseModel):
     status: str
@@ -96,6 +121,15 @@ async def transcribe_audio(
     4. Executes Action (SQLite)
     """
     try:
+        print(f"[TRANSCRIBE] start user_id={getattr(user, 'id', None)} filename={file.filename}")
+
+        # Ensure a corresponding users row exists (id comes from Supabase)
+        models.upsert_user(
+            user_id=user.id,
+            email=getattr(user, "email", None) or f"{user.id}@local",
+            phone_number=getattr(user, "phone", None),
+        )
+
         # A. Transcribe
         temp_filename = f"temp_{file.filename}"
         with open(temp_filename, "wb") as buffer:
@@ -104,40 +138,61 @@ async def transcribe_audio(
         segments, info = model.transcribe(temp_filename, beam_size=5)
         transcript_text = " ".join([segment.text for segment in segments]).strip()
         os.remove(temp_filename)
+        print(f"[TRANSCRIBE] transcript='{transcript_text}'")
         
-        # B. Get Context (The Memory)
-        # We need the user's existing projects so the LLM knows what they are talking about
+        # B. Context
         user_projects = models.get_user_projects(user.id)
+        print(f"[TRANSCRIBE] context_projects_count={len(user_projects)} names={[p.get('name') for p in user_projects]}")
         
-        # C. Parse Intent (The Brain)
-        intent_data = await parse_intent(transcript_text, user_projects)
+        # C. Parse Intent
+        intent_data = await parse_intent(transcript_text, user_projects) or {"intent": "unknown"}
+        print(f"[TRANSCRIBE] raw_intent_data={json.dumps(intent_data, ensure_ascii=False)}")
         
-        # D. Execute Action (The Hands)
+        # Normalize for storage
+        intent_type = intent_data.get("intent") or "unknown"
+        project_name = intent_data.get("project_name")
+        task_description = intent_data.get("task_description")
+        print(f"[TRANSCRIBE] normalized intent_type={intent_type} project_name={project_name!r} task_description={task_description!r}")
+
         action_result = None
+        created = {"project_id": None, "task_id": None}
         
         # --- HANDLER: CREATE PROJECT ---
-        if intent_data.get("intent") == "create_project":
-            new_project_name = intent_data.get("project_name")
+        if intent_type == "create_project":
+            new_project_name = project_name
             if new_project_name:
-                project_id = models.create_project(user.id, new_project_name)
+                created["project_id"] = models.create_project(user.id, new_project_name)
                 action_result = f"Successfully created project '{new_project_name}'."
+                print(f"[TRANSCRIBE] create_project created_project_id={created['project_id']}")
+            else:
+                action_result = "I couldn't determine a project name."
         
         # --- HANDLER: CREATE TASK ---
-        elif intent_data.get("intent") == "create_task":
-            project_name = intent_data.get("project_name")
-            task_description = intent_data.get("task_description")
+        elif intent_type == "create_task":
             if project_name and task_description:
                 project = models.get_project_by_name(user.id, project_name)
+                print(f"[TRANSCRIBE] lookup_project_by_name user_id={user.id} project_name={project_name!r} found={bool(project)}")
                 if project:
-                    models.create_task(project["id"], task_description, voice_command=transcript_text)
+                    models.touch_project(project["id"])
+                    created["task_id"] = models.create_task(
+                        project_id=project["id"],
+                        user_id=user.id,
+                        description=task_description,
+                        voice_command=transcript_text,
+                        raw_transcript=transcript_text,
+                        intent_type=intent_type,
+                        intent_confidence=None,
+                        output_summary=None,
+                    )
                     action_result = f"Created task '{task_description}' in project '{project_name}'."
+                    print(f"[TRANSCRIBE] create_task created_task_id={created['task_id']} project_id={project['id']}")
                 else:
                     action_result = f"Could not find a project named '{project_name}'."
             else:
                 action_result = "I couldn't determine the project or task from your command."
 
         # --- HANDLER: STATUS CHECK ---
-        elif intent_data.get("intent") == "status_check":
+        elif intent_type == "status_check":
             projects_with_counts = models.get_user_projects_with_task_counts(user.id)
             if not projects_with_counts:
                 action_result = "You don't have any projects yet. Try saying 'create a project called my-app'."
@@ -150,20 +205,54 @@ async def transcribe_audio(
                     done = p["completed_tasks"] or 0
                     lines.append(f"  '{p['name']}' — {total} task(s) ({pending} pending, {in_prog} in progress, {done} done)")
                 action_result = "\n".join(lines)
+            print("[TRANSCRIBE] status_check executed")
+
+        else:
+            action_result = "I wasn't able to map that command to an action."
+            print("[TRANSCRIBE] unknown intent executed")
+
+        # Always store a task row for auditability of agent parsing (even if unknown)
+        logged_task_id = models.log_agent_event_task(
+            user_id=user.id,
+            project_name=project_name,
+            projects=user_projects,
+            description=task_description or f"[{intent_type}] {transcript_text}".strip(),
+            raw_transcript=transcript_text,
+            intent_type=intent_type,
+            intent_confidence=None,
+            output_summary=action_result,
+            voice_command=transcript_text,
+        )
+        print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
 
         return {
             "status": "success",
             "transcript": transcript_text,
             "intent": intent_data,
             "action_result": action_result,
-            "context_projects_count": len(user_projects)
+            "context_projects_count": len(user_projects),
+            "created": created,
+            "logged_task_id": logged_task_id,
         }
 
     except Exception as e:
-        print(f"Pipeline Error: {e}")
+        print(f"[TRANSCRIBE] Pipeline Error: {e!r}")
         return {"status": "error", "message": str(e)}
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
+
+@app.get("/api/dashboard/{user_id}")
+async def get_dashboard(user_id: str):
+    projects = models.get_user_projects_with_task_counts(user_id)
+    tasks = models.get_user_tasks(user_id)
+    print(f"[DASHBOARD] user_id={user_id} projects={len(projects)} tasks={len(tasks)}")
+    if tasks:
+        print(f"[DASHBOARD] sample_task_ids={[t.get('id') for t in tasks[:3]]}")
+    return {
+        "success": True,
+        "projects": projects,
+        "tasks": tasks,
+    }
 
 @app.get("/api/projects/{user_id}")
 async def get_user_projects(user_id: str):
@@ -171,6 +260,7 @@ async def get_user_projects(user_id: str):
 
 @app.post("/api/projects")
 async def create_project(request: CreateProjectRequest):
+    models.upsert_user(user_id=request.user_id, email=f"{request.user_id}@local", phone_number=None)
     pid = models.create_project(request.user_id, request.name, request.file_path)
     return {"success": True, "project_id": pid}
 
@@ -180,7 +270,9 @@ async def get_project_tasks(project_id: str):
 
 @app.post("/api/tasks")
 async def create_task(request: CreateTaskRequest):
-    tid = models.create_task(request.project_id, request.description)
+    if not request.user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    tid = models.create_task(request.project_id, request.user_id, request.description)
     return {"success": True, "task_id": tid}
 
 @app.patch("/api/tasks/{task_id}")

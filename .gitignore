@@ -9,3 +9,6 @@ server/__pychache__/
 # Documentation & Claude
 docs/
 CLAUDE.md
+web/package-lock.json
+/server/__pycache__
+/server

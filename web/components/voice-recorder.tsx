@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export function VoiceRecorder() {
@@ -16,6 +17,7 @@ export function VoiceRecorder() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const router = useRouter();
   const supabase = createClient();
 
   const startRecording = async () => {
@@ -95,6 +97,9 @@ export function VoiceRecorder() {
         setIntent(result.intent);
         setActionResult(result.action_result);
         setDebugInfo(`Context: ${result.context_projects_count} projects loaded`);
+
+        // NEW: refresh dashboard data (Server Component re-fetch)
+        router.refresh();
       } else {
         console.error("Server Error:", result);
         setActionResult(`Error: ${result.message}`);

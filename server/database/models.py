@@ -3,6 +3,38 @@ from database.connection import get_db_connection
 import uuid
 from datetime import datetime
 
+# ==================== USERS ====================
+def upsert_user(user_id: str, email: str, phone_number: str | None = None):
+    conn = get_db_connection()
+    try:
+        # Prefer stable upsert by primary key
+        conn.execute(
+            """
+            INSERT INTO users (id, email, phone_number)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                email = COALESCE(excluded.email, users.email),
+                phone_number = COALESCE(excluded.phone_number, users.phone_number)
+            """,
+            (user_id, email, phone_number),
+        )
+    except Exception:
+        # Fallback: if email uniqueness causes issues (e.g., placeholder collisions),
+        # ensure we at least have a row for this (id,email) pair.
+        conn.execute(
+            """
+            INSERT INTO users (id, email, phone_number)
+            VALUES (?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                id = excluded.id,
+                phone_number = COALESCE(excluded.phone_number, users.phone_number)
+            """,
+            (user_id, email, phone_number),
+        )
+    conn.commit()
+    conn.close()
+    print(f"[DB] upsert_user user_id={user_id} email={email!r} phone={phone_number!r}")
+
 # ==================== PROJECTS ====================
 
 def create_project(user_id, name, file_path=None):
@@ -16,7 +48,18 @@ def create_project(user_id, name, file_path=None):
     )
     conn.commit()
     conn.close()
+    print(f"[DB] create_project id={project_id} user_id={user_id} name={name!r}")
     return project_id
+
+def touch_project(project_id: str):
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE projects SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+        (project_id,),
+    )
+    conn.commit()
+    conn.close()
+    print(f"[DB] touch_project project_id={project_id}")
 
 def get_user_projects(user_id):
     """Get all projects for a user."""
@@ -72,18 +115,96 @@ def get_user_projects_with_task_counts(user_id):
 
 # ==================== TASKS ====================
 
-def create_task(project_id, description, voice_command=None):
-    """Create a new task for a project."""
+def create_task(
+    project_id,
+    user_id,
+    description,
+    voice_command=None,
+    raw_transcript=None,
+    intent_type=None,
+    intent_confidence=None,
+    output_summary=None,
+):
     conn = get_db_connection()
     task_id = str(uuid.uuid4())
-
     conn.execute(
-        "INSERT INTO tasks (id, project_id, description, voice_command) VALUES (?, ?, ?, ?)",
-        (task_id, project_id, description, voice_command)
+        """
+        INSERT INTO tasks (
+            id, project_id, user_id,
+            description, voice_command,
+            raw_transcript, intent_type, intent_confidence,
+            output_summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task_id, project_id, user_id,
+            description, voice_command,
+            raw_transcript, intent_type, intent_confidence,
+            output_summary,
+        ),
     )
     conn.commit()
     conn.close()
+    print(
+        "[DB] create_task "
+        f"id={task_id} user_id={user_id} project_id={project_id} "
+        f"intent_type={intent_type!r} desc={description!r}"
+    )
     return task_id
+
+def log_agent_event_task(
+    user_id: str,
+    project_name: str | None,
+    projects: list,
+    description: str,
+    raw_transcript: str,
+    intent_type: str,
+    intent_confidence,
+    output_summary: str | None,
+    voice_command: str | None = None,
+):
+    project_id = None
+    if project_name:
+        p = next((p for p in projects if (p.get("name", "").lower() == project_name.lower())), None)
+        if p:
+            project_id = p.get("id")
+
+    if not project_id:
+        project_id = create_project(user_id, "General")
+        print(f"[DB] log_agent_event_task fallback_project='General' project_id={project_id} user_id={user_id}")
+    else:
+        print(f"[DB] log_agent_event_task resolved_project_id={project_id} user_id={user_id} project_name={project_name!r}")
+
+    touch_project(project_id)
+    tid = create_task(
+        project_id=project_id,
+        user_id=user_id,
+        description=description,
+        voice_command=voice_command,
+        raw_transcript=raw_transcript,
+        intent_type=intent_type,
+        intent_confidence=intent_confidence,
+        output_summary=output_summary,
+    )
+    print(f"[DB] log_agent_event_task wrote task_id={tid}")
+    return tid
+
+def get_user_tasks(user_id: str):
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT t.*, p.name as project_name
+        FROM tasks t
+        LEFT JOIN projects p ON p.id = t.project_id
+        WHERE t.user_id = ?
+        ORDER BY t.created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    result = [dict(r) for r in rows]
+    print(f"[DB] get_user_tasks user_id={user_id} count={len(result)}")
+    return result
 
 def get_project_tasks(project_id):
     """Get all tasks for a project."""

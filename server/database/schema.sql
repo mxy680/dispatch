@@ -20,28 +20,27 @@ CREATE TABLE IF NOT EXISTS projects (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- 3. TASKS TABLE (Updated: "The Memory")
+-- 3. TASKS TABLE (Updated: include user_id for simpler per-user queries)
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
-    
-    -- "The Brain" Context
+    user_id TEXT NOT NULL,
+
     voice_command TEXT,      -- What the user actually said (SRS FR-5.2)
     description TEXT NOT NULL, -- The parsed intent/description
-    
-    -- "The Hands" Result
+
     output_summary TEXT,     -- What Claude actually did (SRS FR-5.2)
 
-    -- "Intent and Transcript Layer"
     intent_type TEXT,          -- e.g., 'create_file', 'run_command', 'search_web'
     intent_confidence REAL,       -- Confidence score from NLP parsing (0.0 - 1.0)
     raw_transcript TEXT,        -- Full transcript of the voice command
-    
+
     status TEXT DEFAULT 'pending', -- 'pending', 'in_progress', 'completed', 'failed'
     assigned_to_claude_instance TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(id)
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 -- 4. INSTANCES TABLE (New: Required for SRS FR-2.1 Orchestration)
@@ -96,3 +95,8 @@ CREATE TABLE IF NOT EXISTS call_messages_log (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (call_session_id) REFERENCES call_sessions(id)
 );
+
+-- Helpful indexes for dashboard queries
+CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed);
+CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_project_created_at ON tasks(project_id, created_at);
