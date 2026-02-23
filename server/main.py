@@ -17,8 +17,15 @@ except Exception as e:
 
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
 
+# --- DEBUG: Print all environment variables ---
+print("[ENV DEBUG] All environment variables:")
+for key, value in os.environ.items():
+    if "SUPABASE" in key or "NEXT_PUBLIC" in key:
+        # Mask sensitive values
+        masked_value = value[:10] + "..." if len(value) > 10 else value
+        print(f"[ENV DEBUG] {key}={masked_value}")
+
 # --- LOCAL IMPORTS ---
-# Make sure these files exist from the previous step!
 from database.connection import init_database
 from database import models
 from services.llm import parse_intent
@@ -26,8 +33,13 @@ from services.llm import parse_intent
 app = FastAPI(title="CallStack API")
 
 # --- CONFIG ---
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE}")
+print(f"[ENV] SUPABASE_URL={SUPABASE_URL[:30] + '...' if SUPABASE_URL else None}")
+print(f"[ENV] SUPABASE_SERVICE_KEY={'SET' if SUPABASE_SERVICE_KEY else 'NOT SET'}")
+print(f"[ENV] SUPABASE_URL_set={bool(SUPABASE_URL)} SUPABASE_SERVICE_KEY_set={bool(SUPABASE_SERVICE_KEY)}")
 print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE} SUPABASE_URL_set={bool(SUPABASE_URL)} SUPABASE_SERVICE_KEY_set={bool(SUPABASE_SERVICE_KEY)}")
 
 app.add_middleware(
@@ -131,6 +143,7 @@ async def transcribe_audio(
         )
 
         # A. Transcribe
+        print(f"[TRANSCRIBE] Step A: Starting audio transcription")
         temp_filename = f"temp_{file.filename}"
         with open(temp_filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -141,10 +154,11 @@ async def transcribe_audio(
         print(f"[TRANSCRIBE] transcript='{transcript_text}'")
         
         # B. Context
+        print(f"[TRANSCRIBE] Step B: Fetching user projects")
         user_projects = models.get_user_projects(user.id)
         print(f"[TRANSCRIBE] context_projects_count={len(user_projects)} names={[p.get('name') for p in user_projects]}")
-        
         # C. Parse Intent
+        print(f"[TRANSCRIBE] Step C: Parsing intent with LLM")
         intent_data = await parse_intent(transcript_text, user_projects) or {"intent": "unknown"}
         print(f"[TRANSCRIBE] raw_intent_data={json.dumps(intent_data, ensure_ascii=False)}")
         
@@ -236,8 +250,11 @@ async def transcribe_audio(
         }
 
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
         print(f"[TRANSCRIBE] Pipeline Error: {e!r}")
-        return {"status": "error", "message": str(e)}
+        print(f"[TRANSCRIBE] Full traceback:\n{error_trace}")
+        return {"status": "error", "message": str(e), "traceback": error_trace}
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 
