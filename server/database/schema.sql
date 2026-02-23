@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     
     -- "The Hands" Result
     output_summary TEXT,     -- What Claude actually did (SRS FR-5.2)
+
+    -- "Intent and Transcript Layer"
+    intent_type TEXT,          -- e.g., 'create_file', 'run_command', 'search_web'
+    intent_confidence REAL,       -- Confidence score from NLP parsing (0.0 - 1.0)
+    raw_transcript TEXT,        -- Full transcript of the voice command
     
     status TEXT DEFAULT 'pending', -- 'pending', 'in_progress', 'completed', 'failed'
     assigned_to_claude_instance TEXT,
@@ -71,4 +76,23 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     email_notifications INTEGER DEFAULT 1,
     sms_notifications INTEGER DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS intents (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    intent_type TEXT NOT NULL, -- e.g., 'create_file', 'run_command', 'search_web'
+    confidence REAL,           -- Confidence score from NLP parsing (0.0 - 1.0)
+    raw_transcript TEXT,      -- Full transcript of the voice command
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS call_messages_log (
+    id TEXT PRIMARY KEY,
+    call_session_id TEXT NOT NULL,
+    sender TEXT NOT NULL, -- 'user' or 'claude'
+    message TEXT NOT NULL,
+    intent_detected TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (call_session_id) REFERENCES call_sessions(id)
 );
