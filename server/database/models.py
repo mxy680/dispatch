@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # server/database/models.py
 from database.connection import get_db_connection
 import uuid

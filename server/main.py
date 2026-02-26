@@ -1,7 +1,8 @@
+from __future__ import annotations
 import os
 import shutil
 import json
-from typing import Annotated, Union
+from typing import Annotated, Union, Optional
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
@@ -115,7 +116,7 @@ class CreateTaskRequest(BaseModel):
     project_id: str
     description: str
     # allow client/dashboard-created tasks to attach user_id explicitly
-    user_id: str | None = None
+    user_id: Optional[str] = None
 
 class UpdateTaskRequest(BaseModel):
     status: str
