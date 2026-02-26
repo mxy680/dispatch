@@ -297,6 +297,11 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
     models.update_task_status(task_id, request.status)
     return {"success": True, "message": "Task updated"}
 
+@app.get("/api/call-sessions/{user_id}")
+async def get_call_history(user_id: str):
+    sessions = models.get_user_call_history(user_id, limit=20)
+    return {"success": True, "sessions": sessions}
+
 @app.get("/")
 async def root():
     return {"status": "CallStack Agent is Listening..."}
