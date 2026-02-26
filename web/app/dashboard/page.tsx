@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { VoiceRecorder } from "@/components/voice-recorder";
+import Link from "next/link";
 
 type ProjectRow = {
   id: string;
@@ -35,7 +36,6 @@ export default async function DashboardPage() {
   const dashRes = await fetch(`${backendUrl}/api/dashboard/${user.id}`, { cache: "no-store" });
   const dashJson = (await dashRes.json()) as { projects: ProjectRow[]; tasks: TaskRow[] };
 
-  // NEW: basic SSR debug
   const apiDebug = {
     status: dashRes.status,
     ok: dashRes.ok,
@@ -139,7 +139,6 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      {/* NEW: debug panel */}
       <section className="w-full max-w-5xl">
         <details className="bg-dark-card border border-dark-border rounded-xl p-4">
           <summary className="text-xs font-mono text-gray-400 cursor-pointer">DEBUG: /api/dashboard response</summary>
@@ -148,6 +147,10 @@ export default async function DashboardPage() {
           </pre>
         </details>
       </section>
+
+      <Link href="/dashboard/history" className="text-sm text-gray-400 hover:text-white transition-colors">
+        View Call History →
+      </Link>
 
       <form action="/auth/signout" method="post" className="mt-8">
         <button className="text-sm text-gray-600 hover:text-red-400 transition-colors">Sign Out</button>
