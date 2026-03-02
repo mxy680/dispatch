@@ -96,6 +96,24 @@ CREATE TABLE IF NOT EXISTS call_messages_log (
     FOREIGN KEY (call_session_id) REFERENCES call_sessions(id)
 );
 
+-- 8. AGENT EXECUTIONS TABLE (tracks prompt refiner + copilot agent pipeline)
+CREATE TABLE IF NOT EXISTS agent_executions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    stage TEXT NOT NULL,          -- 'refine', 'dispatch', 'execute', 'complete'
+    agent_type TEXT NOT NULL,     -- 'prompt_refiner', 'copilot_agent'
+    input_prompt TEXT,
+    refined_prompt TEXT,
+    output_result TEXT,
+    explanation TEXT,
+    status TEXT DEFAULT 'pending', -- 'pending', 'running', 'success', 'failed'
+    error_message TEXT,
+    execution_time_ms INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
 -- Helpful indexes for dashboard queries
 CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at);

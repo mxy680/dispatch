@@ -42,6 +42,27 @@ def _run_migrations(conn: sqlite3.Connection):
         _ensure_column(conn, "projects", "status", "TEXT DEFAULT 'active'")
         _ensure_column(conn, "projects", "last_accessed", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
+    # agent_executions table (new)
+    if "agent_executions" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_executions (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                input_prompt TEXT,
+                refined_prompt TEXT,
+                output_result TEXT,
+                explanation TEXT,
+                status TEXT DEFAULT 'pending',
+                error_message TEXT,
+                execution_time_ms INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+
     # Indexes (idempotent) - keep here so they run AFTER columns exist
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at)")

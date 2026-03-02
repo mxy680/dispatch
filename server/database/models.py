@@ -265,3 +265,114 @@ def get_user_call_history(user_id, limit=10):
     ).fetchall()
     conn.close()
     return [dict(row) for row in sessions]
+
+# ==================== AGENT EXECUTIONS ====================
+
+def create_agent_execution(
+    task_id: str,
+    stage: str,
+    agent_type: str,
+    input_prompt: str = None,
+    refined_prompt: str = None,
+    status: str = "pending",
+) -> str:
+    conn = get_db_connection()
+    exec_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO agent_executions
+            (id, task_id, stage, agent_type, input_prompt, refined_prompt, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (exec_id, task_id, stage, agent_type, input_prompt, refined_prompt, status),
+    )
+    conn.commit()
+    conn.close()
+    print(f"[DB] create_agent_execution id={exec_id} task_id={task_id} stage={stage}")
+    return exec_id
+
+
+def update_agent_execution(
+    exec_id: str,
+    status: str,
+    output_result: str = None,
+    explanation: str = None,
+    error_message: str = None,
+    execution_time_ms: int = None,
+):
+    conn = get_db_connection()
+    completed_at = datetime.now().isoformat() if status in ("success", "failed") else None
+    conn.execute(
+        """
+        UPDATE agent_executions
+        SET status = ?, output_result = ?, explanation = ?,
+            error_message = ?, execution_time_ms = ?, completed_at = ?
+        WHERE id = ?
+        """,
+        (status, output_result, explanation, error_message, execution_time_ms, completed_at, exec_id),
+    )
+    conn.commit()
+    conn.close()
+    print(f"[DB] update_agent_execution id={exec_id} status={status}")
+
+
+def store_agent_feedback(
+    task_id: str,
+    output: str,
+    explanation: str,
+    status: str,
+):
+    """Called by file_watcher when a result JSON is picked up."""
+    exec_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT INTO agent_executions
+            (id, task_id, stage, agent_type, output_result, explanation, status, completed_at)
+        VALUES (?, ?, 'complete', 'copilot_agent', ?, ?, ?, ?)
+        """,
+        (exec_id, task_id, output, explanation, status, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    print(f"[DB] store_agent_feedback task_id={task_id} status={status}")
+
+
+def get_agent_executions(task_id: str) -> list:
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM agent_executions WHERE task_id = ? ORDER BY created_at ASC",
+        (task_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_task_agent_status(task_id: str) -> dict:
+    """Get latest agent execution status for a task."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT * FROM agent_executions WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"status": "none", "stage": "none"}
+
+
+def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
+    """Get all agent executions for a user's tasks."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT ae.*, t.description as task_description, p.name as project_name
+        FROM agent_executions ae
+        JOIN tasks t ON t.id = ae.task_id
+        LEFT JOIN projects p ON p.id = t.project_id
+        WHERE t.user_id = ?
+        ORDER BY ae.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

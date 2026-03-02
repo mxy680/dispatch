@@ -3,7 +3,7 @@ import os
 import shutil
 import json
 from typing import Annotated, Union, Optional
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from supabase import create_client, Client
@@ -30,6 +30,8 @@ for key, value in os.environ.items():
 from database.connection import init_database
 from database import models
 from services.llm import parse_intent
+from agents.copilot_agent import dispatch_task as agent_dispatch_task
+from agents.copilot_agent import set_terminal_access, get_terminal_access
 
 app = FastAPI(title="CallStack API")
 
@@ -125,13 +127,15 @@ class UpdateTaskRequest(BaseModel):
 @app.post("/transcribe")
 async def transcribe_audio(
     file: UploadFile = File(...), 
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
     """
     1. Transcribes Audio (Whisper)
     2. Fetches Context (SQLite)
     3. Determines Intent (Bedrock)
     4. Executes Action (SQLite)
+    5. Dispatches to Agent Pipeline (Background)
     """
     try:
         print(f"[TRANSCRIBE] start user_id={getattr(user, 'id', None)} filename={file.filename}")
@@ -240,6 +244,24 @@ async def transcribe_audio(
         )
         print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
 
+        # --- D. DISPATCH TO AGENT PIPELINE (background) ---
+        dispatch_task_id = created.get("task_id") or logged_task_id
+        agent_status = None
+        terminal_granted = get_terminal_access(user.id)
+        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
+            if background_tasks:
+                background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+                agent_status = "dispatching"
+                print(f"[TRANSCRIBE] agent pipeline dispatched in background task_id={dispatch_task_id} terminal={terminal_granted}")
+            else:
+                # Fallback: run synchronously
+                try:
+                    pipeline_result = agent_dispatch_task(dispatch_task_id, intent_data, terminal_granted)
+                    agent_status = pipeline_result.get("status", "unknown")
+                except Exception as ae:
+                    agent_status = f"dispatch_error: {ae}"
+                    print(f"[TRANSCRIBE] agent dispatch error: {ae}")
+
         return {
             "status": "success",
             "transcript": transcript_text,
@@ -248,6 +270,8 @@ async def transcribe_audio(
             "context_projects_count": len(user_projects),
             "created": created,
             "logged_task_id": logged_task_id,
+            "agent_status": agent_status,
+            "terminal_access": terminal_granted,
         }
 
     except Exception as e:
@@ -302,6 +326,81 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
 async def get_call_history(user_id: str):
     sessions = models.get_user_call_history(user_id, limit=20)
     return {"success": True, "sessions": sessions}
+
+# --- 7. AGENT PIPELINE ENDPOINTS ---
+
+@app.get("/api/agent/status/{task_id}")
+async def get_agent_status(task_id: str):
+    """Get agent pipeline status for a specific task."""
+    executions = models.get_agent_executions(task_id)
+    latest = models.get_task_agent_status(task_id)
+    return {
+        "success": True,
+        "task_id": task_id,
+        "latest": latest,
+        "executions": executions,
+    }
+
+
+@app.get("/api/agent/executions/{user_id}")
+async def get_user_agent_executions(user_id: str):
+    """Get all agent executions for a user."""
+    executions = models.get_user_agent_executions(user_id)
+    return {
+        "success": True,
+        "executions": executions,
+    }
+
+
+@app.post("/api/agent/dispatch/{task_id}")
+async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks):
+    """Manually trigger agent dispatch for a task."""
+    from database.connection import get_db_connection
+    conn = get_db_connection()
+    task_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    if not task_row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task_dict = dict(task_row)
+    intent_data = {
+        "intent": task_dict.get("intent_type", "create_task"),
+        "project_name": None,
+        "task_description": task_dict.get("description", ""),
+    }
+    # Get project name
+    if task_dict.get("project_id"):
+        project = models.get_project_by_id(task_dict["project_id"])
+        if project:
+            intent_data["project_name"] = project["name"]
+
+    user_id = task_dict.get("user_id", "")
+    terminal_granted = get_terminal_access(user_id)
+    background_tasks.add_task(agent_dispatch_task, task_id, intent_data, terminal_granted)
+    return {"success": True, "message": "Agent pipeline dispatched", "task_id": task_id, "terminal_access": terminal_granted}
+
+
+# --- 8. TERMINAL ACCESS ENDPOINTS ---
+
+@app.post("/api/agent/terminal-access/{user_id}")
+async def grant_terminal_access(user_id: str):
+    """User grants permission for auto-terminal execution."""
+    set_terminal_access(user_id, True)
+    return {"success": True, "terminal_access": True, "message": "Terminal access granted. Tasks will auto-execute in terminal."}
+
+
+@app.delete("/api/agent/terminal-access/{user_id}")
+async def revoke_terminal_access(user_id: str):
+    """User revokes terminal execution permission."""
+    set_terminal_access(user_id, False)
+    return {"success": True, "terminal_access": False, "message": "Terminal access revoked."}
+
+
+@app.get("/api/agent/terminal-access/{user_id}")
+async def check_terminal_access(user_id: str):
+    """Check if user has granted terminal access."""
+    granted = get_terminal_access(user_id)
+    return {"success": True, "terminal_access": granted}
+
 
 @app.get("/")
 async def root():
