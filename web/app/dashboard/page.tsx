@@ -122,7 +122,16 @@ export default async function DashboardPage() {
                     <td className="py-2">{t.project_name ?? t.project_id}</td>
                     <td className="py-2">{t.description}</td>
                     <td className="py-2">{t.intent_type ?? "-"}</td>
-                    <td className="py-2">{t.status}</td>
+                    <td className="py-2">
+                    <td className="py-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-mono ${
+                        t.status === "completed" ? "bg-green-500/20 text-green-400" :
+                        t.status === "in_progress" ? "bg-blue-500/20 text-blue-400" :
+                        "bg-yellow-500/20 text-yellow-400"
+                      }`}>
+                        {t.status}
+                      </span>
+                    </td>
                     <td className="py-2">{new Date(t.created_at).toLocaleString()}</td>
                   </tr>
                 ))}
