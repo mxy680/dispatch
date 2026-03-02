@@ -12,3 +12,9 @@ CLAUDE.md
 web/package-lock.json
 /server/__pycache__
 /server
+server/__pycache__/main.cpython-310.pyc
+/server/__pycache__
+*.pyc
+web/package-lock.json
+/server/__pycache__
+
