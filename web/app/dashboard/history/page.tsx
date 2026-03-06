@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
 type CallSession = {
   id: string;
@@ -20,7 +19,7 @@ export default async function HistoryPage() {
 
   if (!user) redirect("/login");
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendUrl = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const res = await fetch(`${backendUrl}/api/call-sessions/${user.id}`, {
     cache: "no-store",
   });
@@ -28,18 +27,10 @@ export default async function HistoryPage() {
   const sessions = json.sessions ?? [];
 
   return (
-    <main className="min-h-screen bg-dark-bg p-4 flex flex-col items-center gap-8">
-      <div className="w-full max-w-5xl flex items-center justify-between pt-4">
-        <h1 className="text-2xl font-bold tracking-tight">Call History</h1>
-        <Link
-          href="/dashboard"
-          className="text-sm text-gray-400 hover:text-white transition-colors"
-        >
-          ← Back to Dashboard
-        </Link>
-      </div>
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold tracking-tight">Call History</h1>
 
-      <section className="w-full max-w-5xl bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
         <div className="bg-black/40 px-4 py-2 border-b border-white/5">
           <span className="text-xs font-mono text-gray-500">SESSIONS</span>
         </div>
@@ -82,7 +73,7 @@ export default async function HistoryPage() {
             </tbody>
           </table>
         </div>
-      </section>
-    </main>
+      </div>
+    </div>
   );
 }

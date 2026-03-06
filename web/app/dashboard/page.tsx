@@ -1,11 +1,10 @@
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 import { VoiceRecorder } from "@/components/voice-recorder";
 import { AgentStatusPanel } from "@/components/agent-status-panel";
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { DispatchButton } from "@/components/dispatch-button";
 import { TerminalConsole } from "@/components/terminal-console";
-import Link from "next/link";
 
 type ProjectRow = {
   id: string;
@@ -36,7 +35,7 @@ export default async function DashboardPage() {
 
   if (!user) redirect("/login");
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendUrl = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const dashRes = await fetch(`${backendUrl}/api/dashboard/${user.id}`, { cache: "no-store" });
   const dashJson = (await dashRes.json()) as { projects: ProjectRow[]; tasks: TaskRow[] };
 
@@ -52,24 +51,13 @@ export default async function DashboardPage() {
   const tasks = dashJson.tasks ?? [];
 
   return (
-    <main className="min-h-screen bg-dark-bg p-4 flex flex-col items-center justify-center gap-12">
-      <div className="text-center space-y-2">
-        <h1 className="text-4xl font-bold tracking-tight">CallStack</h1>
-        <p className="text-gray-400">
-          Connected as{" "}
-          <span className="text-supabase-green font-mono">{user.phone || user.email}</span>
-        </p>
-      </div>
-
-      <div className="w-full max-w-2xl">
+    <div className="space-y-8">
+      <div className="max-w-2xl mx-auto space-y-6">
         <TerminalAccessToggle userId={user.id} />
-      </div>
-
-      <div className="w-full max-w-2xl">
         <VoiceRecorder />
       </div>
 
-      <section className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
             <div className="bg-black/40 px-4 py-2 border-b border-white/5">
@@ -170,25 +158,12 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      <section className="w-full max-w-5xl">
-        <details className="bg-dark-card border border-dark-border rounded-xl p-4">
-          <summary className="text-xs font-mono text-gray-400 cursor-pointer">DEBUG: /api/dashboard response</summary>
-          <pre className="mt-3 text-xs text-gray-300 overflow-auto">
-            {JSON.stringify({ apiDebug, dashJson }, null, 2)}
-          </pre>
-        </details>
-      </section>
-
-      <Link href="/dashboard/history" className="text-sm text-gray-400 hover:text-white transition-colors">
-        View Call History →
-      </Link>
-      <Link href="/dashboard/settings" className="text-sm text-gray-400 hover:text-white transition-colors">
-        Settings →
-      </Link>
-
-      <form action="/auth/signout" method="post" className="mt-8">
-        <button className="text-sm text-gray-600 hover:text-red-400 transition-colors">Sign Out</button>
-      </form>
-    </main>
+      <details className="bg-dark-card border border-dark-border rounded-xl p-4">
+        <summary className="text-xs font-mono text-gray-400 cursor-pointer">DEBUG: /api/dashboard response</summary>
+        <pre className="mt-3 text-xs text-gray-300 overflow-auto">
+          {JSON.stringify({ apiDebug, dashJson }, null, 2)}
+        </pre>
+      </details>
+    </div>
   );
 }
