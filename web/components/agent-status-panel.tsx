@@ -1,5 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type AgentExecution = {
   id: string;
@@ -66,23 +69,23 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
 
   if (loading) {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-xl p-6">
+      <Card className="bg-dark-card border-dark-border p-6">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
           <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider">Agent Pipeline</h3>
         </div>
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-16 bg-gray-800/50 rounded-lg animate-shimmer" />
+            <Skeleton key={i} className="h-16 bg-gray-800/50 rounded-lg" />
           ))}
         </div>
-      </div>
+      </Card>
     );
   }
 
   if (executions.length === 0) {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-xl p-6">
+      <Card className="bg-dark-card border-dark-border p-6">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-2 h-2 rounded-full bg-gray-600" />
           <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider">Agent Pipeline</h3>
@@ -90,12 +93,12 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
         <p className="text-gray-600 text-sm font-mono text-center py-8">
           No agent executions yet. Record a voice command to dispatch tasks.
         </p>
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-xl p-6">
+    <Card className="bg-dark-card border-dark-border p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-supabase-green animate-pulse" />
@@ -122,22 +125,25 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
                 <span className="text-sm font-medium text-gray-300 truncate">
                   {exec.task_description || exec.task_id.slice(0, 8)}
                 </span>
-                <span className="text-xs px-1.5 py-0.5 rounded font-mono bg-black/30 text-gray-500">
+                <Badge variant="outline" className="text-xs font-mono bg-black/30 text-gray-500 border-gray-700 px-1.5 py-0.5">
                   {exec.stage}
-                </span>
+                </Badge>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {exec.execution_time_ms !== undefined && exec.execution_time_ms !== null && (
                   <span className="text-xs font-mono text-gray-600">{exec.execution_time_ms}ms</span>
                 )}
-                <span className={`text-xs font-mono font-bold ${
-                  exec.status === "success" ? "text-green-400" :
-                  exec.status === "failed" ? "text-red-400" :
-                  exec.status === "running" ? "text-yellow-400" : "text-gray-500"
-                }`}>
+                <Badge
+                  variant="outline"
+                  className={`text-xs font-mono font-bold border-0 px-0 ${
+                    exec.status === "success" ? "text-green-400" :
+                    exec.status === "failed" ? "text-red-400" :
+                    exec.status === "running" ? "text-yellow-400" : "text-gray-500"
+                  }`}
+                >
                   {exec.status === "running" && "⏳ "}
                   {exec.status.toUpperCase()}
-                </span>
+                </Badge>
               </div>
             </div>
 
@@ -179,6 +185,6 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }

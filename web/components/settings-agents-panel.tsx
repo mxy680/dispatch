@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getAuthHeader } from "@/lib/supabase/access-token";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 type AgentTokenRow = {
   id: string;
@@ -90,12 +93,12 @@ export function SettingsAgentsPanel() {
   };
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-      <div className="bg-black/40 px-4 py-2 border-b border-white/5">
+    <Card className="bg-dark-card border-dark-border overflow-hidden">
+      <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 space-y-0 pb-2">
         <span className="text-xs font-mono text-gray-500">AGENTS</span>
-      </div>
+      </CardHeader>
 
-      <div className="p-6 space-y-4">
+      <CardContent className="p-6 space-y-4">
         <div>
           <h2 className="text-lg font-semibold text-white">Connect a local agent</h2>
           <p className="text-sm text-gray-400 mt-1">
@@ -106,31 +109,33 @@ export function SettingsAgentsPanel() {
         {err && <div className="text-xs font-mono text-red-400">{err}</div>}
 
         <div className="flex gap-2">
-          <input
+          <Input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="Label (optional): e.g. MacBook Pro"
-            className="flex-1 text-sm bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-supabase-green"
+            className="flex-1 bg-dark-bg border-dark-border text-white placeholder:text-gray-600 focus-visible:ring-0 focus-visible:border-supabase-green"
           />
-          <button
+          <Button
             onClick={createToken}
             disabled={loading}
-            className="px-4 py-2 rounded-md bg-supabase-green text-black font-medium hover:bg-supabase-green-dark disabled:opacity-50"
+            className="bg-supabase-green text-black font-medium hover:bg-supabase-green-dark"
           >
             Create token
-          </button>
+          </Button>
         </div>
 
         {createdToken && (
           <div className="bg-black/30 border border-white/10 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-mono text-gray-500">Your new agent token (shown once)</p>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => navigator.clipboard.writeText(createdToken)}
-                className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300"
+                className="text-xs font-mono h-7 px-2 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300"
               >
                 Copy
-              </button>
+              </Button>
             </div>
             <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap break-words">
               {createdToken}
@@ -143,12 +148,14 @@ export function SettingsAgentsPanel() {
                   <pre className="flex-1 text-xs font-mono text-gray-200 whitespace-pre-wrap break-words bg-black/40 border border-white/10 rounded p-3">
                     {installCommand}
                   </pre>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => navigator.clipboard.writeText(installCommand)}
-                    className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300"
+                    className="text-xs font-mono h-7 px-2 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 shrink-0"
                   >
                     Copy
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
@@ -176,13 +183,15 @@ export function SettingsAgentsPanel() {
                         {revoked ? ` • revoked ${new Date(t.revoked_at as string).toLocaleString()}` : ""}
                       </div>
                     </div>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => revokeToken(t.id)}
                       disabled={loading || revoked}
-                      className="text-xs font-mono px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 disabled:opacity-50"
+                      className="text-xs font-mono h-7 px-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 disabled:opacity-50"
                     >
                       Revoke
-                    </button>
+                    </Button>
                   </div>
                   <div className="text-[11px] font-mono text-gray-700 mt-2">
                     Token ID: {t.id}
@@ -197,8 +206,7 @@ export function SettingsAgentsPanel() {
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
-

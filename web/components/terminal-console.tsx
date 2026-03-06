@@ -2,6 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAuthHeader } from "@/lib/supabase/access-token";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type ProjectOption = { id: string; name: string };
 
@@ -215,74 +225,84 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   };
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-      <div className="bg-black/40 px-4 py-2 border-b border-white/5 flex items-center justify-between">
+    <Card className="bg-dark-card border-dark-border overflow-hidden">
+      <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 flex flex-row items-center justify-between space-y-0 pb-2">
         <span className="text-xs font-mono text-gray-500">TERMINAL</span>
         <div className="flex items-center gap-2">
-          <select
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="text-xs font-mono bg-black/30 border border-white/10 rounded px-2 py-1 text-gray-300"
-          >
-            {projects.length > 0 ? (
-              projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))
-            ) : (
-              <option value="">No projects</option>
-            )}
-          </select>
-          <button
+          <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+            <SelectTrigger className="h-7 text-xs font-mono bg-black/30 border-white/10 text-gray-300 w-auto min-w-[120px]">
+              <SelectValue placeholder="No projects" />
+            </SelectTrigger>
+            <SelectContent className="bg-dark-card border-dark-border">
+              {projects.length > 0 ? (
+                projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id} className="text-xs font-mono text-gray-300">
+                    {p.name}
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="none" disabled className="text-xs font-mono text-gray-500">
+                  No projects
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={createSession}
             disabled={loading || !selectedProjectId}
-            className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 disabled:opacity-50"
+            className="h-7 text-xs font-mono bg-white/5 hover:bg-white/10 border-white/10 text-gray-300"
           >
             New session
-          </button>
+          </Button>
         </div>
-      </div>
+      </CardHeader>
 
-      <div className="p-4 space-y-3">
+      <CardContent className="p-4 space-y-3">
         {err && <div className="text-xs font-mono text-red-400">{err}</div>}
 
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-gray-500">Session</span>
-          <select
-            value={selectedSessionId}
-            onChange={(e) => setSelectedSessionId(e.target.value)}
-            className="flex-1 text-xs font-mono bg-black/30 border border-white/10 rounded px-2 py-1 text-gray-300"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {(s.name ?? "Terminal").slice(0, 24)} • {s.status}
-              </option>
-            ))}
-            {sessions.length === 0 && <option value="">No sessions</option>}
-          </select>
+          <Select value={selectedSessionId} onValueChange={setSelectedSessionId}>
+            <SelectTrigger className="flex-1 h-7 text-xs font-mono bg-black/30 border-white/10 text-gray-300">
+              <SelectValue placeholder="No sessions" />
+            </SelectTrigger>
+            <SelectContent className="bg-dark-card border-dark-border">
+              {sessions.map((s) => (
+                <SelectItem key={s.id} value={s.id} className="text-xs font-mono text-gray-300">
+                  {(s.name ?? "Terminal").slice(0, 24)} • {s.status}
+                </SelectItem>
+              ))}
+              {sessions.length === 0 && (
+                <SelectItem value="none" disabled className="text-xs font-mono text-gray-500">
+                  No sessions
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
           <span className="text-[10px] font-mono text-gray-600">
             {selectedSession?.instance_id ? "local agent connected" : "no local agent"}
           </span>
         </div>
 
         <div className="flex gap-2">
-          <input
+          <Input
             value={commandText}
             onChange={(e) => setCommandText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") runCommand();
             }}
             placeholder="Type a command (runs locally)"
-            className="flex-1 text-sm font-mono bg-black/30 border border-white/10 rounded px-3 py-2 text-gray-200 placeholder:text-gray-600"
+            className="flex-1 text-sm font-mono bg-black/30 border-white/10 text-gray-200 placeholder:text-gray-600 focus-visible:ring-0 focus-visible:border-white/20"
           />
-          <button
+          <Button
             onClick={runCommand}
             disabled={loading || !selectedSessionId || !commandText.trim()}
-            className="text-sm font-mono px-3 py-2 rounded bg-supabase-green text-black hover:bg-supabase-green-dark disabled:opacity-50"
+            className="text-sm font-mono bg-supabase-green text-black hover:bg-supabase-green-dark"
           >
             Run
-          </button>
+          </Button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -333,8 +353,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
-

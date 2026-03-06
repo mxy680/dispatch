@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
 
 type AgentStage = {
   stage: string;
@@ -228,7 +229,7 @@ export function VoiceRecorder() {
             : "bg-gray-700"
         }`} />
 
-        {/* Record Button */}
+        {/* Record Button — kept as custom circular button per spec */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={loading}
@@ -260,15 +261,13 @@ export function VoiceRecorder() {
 
       {/* --- AGENT OUTPUT CONSOLE --- */}
       {(transcript || intent) && (
-        <div className="w-full bg-dark-card border border-dark-border rounded-xl overflow-hidden shadow-xl animate-fade-in-up">
-
-          {/* Header */}
-          <div className="bg-black/40 px-4 py-2 border-b border-white/5 flex items-center justify-between">
+        <Card className="w-full bg-dark-card border-dark-border overflow-hidden shadow-xl animate-fade-in-up">
+          <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 flex flex-row items-center justify-between space-y-0 pb-2">
             <span className="text-xs font-mono text-gray-500">AGENT LOGS</span>
             {debugInfo && <span className="text-xs font-mono text-gray-600">{debugInfo}</span>}
-          </div>
+          </CardHeader>
 
-          <div className="p-6 space-y-6">
+          <CardContent className="p-6 space-y-6">
 
             {/* 1. The Ear (Transcript) */}
             {transcript && (
@@ -408,8 +407,8 @@ export function VoiceRecorder() {
                 )}
               </div>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
