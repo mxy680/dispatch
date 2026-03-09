@@ -69,7 +69,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
 
   if (loading) {
     return (
-      <Card className="bg-dark-card border-dark-border p-6">
+      <Card className="h-full p-6">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
           <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider">Agent Pipeline</h3>
@@ -85,7 +85,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
 
   if (executions.length === 0) {
     return (
-      <Card className="bg-dark-card border-dark-border p-6">
+      <Card className="h-full p-6">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-2 h-2 rounded-full bg-gray-600" />
           <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider">Agent Pipeline</h3>
@@ -98,7 +98,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
   }
 
   return (
-    <Card className="bg-dark-card border-dark-border p-6">
+    <Card className="h-full p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-supabase-green animate-pulse" />

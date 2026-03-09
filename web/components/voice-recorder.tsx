@@ -214,27 +214,15 @@ export function VoiceRecorder() {
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto flex flex-col items-center gap-8">
-
+    <Card className="h-full flex flex-col overflow-hidden">
       {/* --- ACTION AREA --- */}
-      <div className="flex flex-col items-center gap-4">
-        {/* Status Light */}
-        <div className={`w-3 h-3 rounded-full transition-all duration-300 ${
-          isRecording
-            ? "bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]"
-            : agentStatus === "dispatching"
-            ? "bg-yellow-500 animate-pulse shadow-[0_0_10px_rgba(234,179,8,0.6)]"
-            : agentStatus === "complete"
-            ? "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]"
-            : "bg-gray-700"
-        }`} />
-
-        {/* Record Button — kept as custom circular button per spec */}
+      <div className="flex items-center gap-5 p-5 border-b border-border">
+        {/* Record Button */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={loading}
           className={`
-            w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 shadow-2xl
+            w-16 h-16 shrink-0 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg
             ${isRecording
               ? "bg-red-500/10 text-red-500 border-2 border-red-500 scale-110"
               : "bg-supabase-green text-black hover:bg-supabase-green-dark hover:scale-105"
@@ -243,25 +231,39 @@ export function VoiceRecorder() {
           `}
         >
           {loading ? (
-            <div className="w-8 h-8 border-4 border-current border-t-transparent rounded-full animate-spin" />
+            <div className="w-6 h-6 border-3 border-current border-t-transparent rounded-full animate-spin" />
           ) : isRecording ? (
-            <div className="w-8 h-8 bg-current rounded-md" />
+            <div className="w-5 h-5 bg-current rounded-sm" />
           ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
               <path d="M8.25 4.5a3.75 3.75 0 117.5 0v8.25a3.75 3.75 0 11-7.5 0V4.5z" />
               <path d="M6 10.5a.75.75 0 01.75.75v1.5a5.25 5.25 0 1010.5 0v-1.5a.75.75 0 011.5 0v1.5a6.751 6.751 0 01-6 6.709v2.291h3a.75.75 0 010 1.5h-7.5a.75.75 0 010-1.5h3v-2.291a6.751 6.751 0 01-6-6.709v-1.5A.75.75 0 016 10.5z" />
             </svg>
           )}
         </button>
 
-        <p className="text-gray-400 font-mono text-sm">
-          {loading ? "Processing..." : isRecording ? "Listening..." : "Tap to Speak"}
-        </p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Voice Command</p>
+          <p className="text-xs text-muted-foreground font-mono">
+            {loading ? "Processing audio..." : isRecording ? "Listening — tap to stop" : "Tap the mic to issue a command"}
+          </p>
+        </div>
+
+        {/* Status Light */}
+        <div className={`w-2.5 h-2.5 rounded-full shrink-0 transition-all duration-300 ${
+          isRecording
+            ? "bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]"
+            : agentStatus === "dispatching"
+            ? "bg-yellow-500 animate-pulse shadow-[0_0_10px_rgba(234,179,8,0.6)]"
+            : agentStatus === "complete"
+            ? "bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]"
+            : "bg-muted-foreground/30"
+        }`} />
       </div>
 
       {/* --- AGENT OUTPUT CONSOLE --- */}
-      {(transcript || intent) && (
-        <Card className="w-full bg-dark-card border-dark-border overflow-hidden shadow-xl animate-fade-in-up">
+      {(transcript || intent) ? (
+        <div className="flex-1 overflow-auto">
           <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 flex flex-row items-center justify-between space-y-0 pb-2">
             <span className="text-xs font-mono text-gray-500">AGENT LOGS</span>
             {debugInfo && <span className="text-xs font-mono text-gray-600">{debugInfo}</span>}
@@ -408,8 +410,12 @@ export function VoiceRecorder() {
               </div>
             )}
           </CardContent>
-        </Card>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <p className="text-sm text-muted-foreground">No commands yet. Record a voice command to get started.</p>
+        </div>
       )}
-    </div>
+    </Card>
   );
 }

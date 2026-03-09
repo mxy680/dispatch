@@ -225,7 +225,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   };
 
   return (
-    <Card className="bg-dark-card border-dark-border overflow-hidden">
+    <Card className="h-full overflow-hidden">
       <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 flex flex-row items-center justify-between space-y-0 pb-2">
         <span className="text-xs font-mono text-gray-500">TERMINAL</span>
         <div className="flex items-center gap-2">

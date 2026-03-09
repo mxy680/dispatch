@@ -59,85 +59,69 @@ export default async function DashboardPage() {
   const projects = dashJson.projects ?? [];
   const tasks = dashJson.tasks ?? [];
 
-  const totalTasks = tasks.length;
   const completedTasks = tasks.filter((t) => t.status === "completed" || t.status === "agent_completed").length;
   const inProgressTasks = tasks.filter((t) => t.status === "in_progress").length;
-  const pendingTasks = tasks.filter((t) => t.status === "pending").length;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 auto-rows-min">
-      {/* Row 1: Stats cards — 4 across */}
-      <Card className="lg:col-span-3">
-        <CardContent className="pt-6">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Projects</p>
-          <p className="text-3xl font-bold mt-1">{projects.length}</p>
-        </CardContent>
-      </Card>
-      <Card className="lg:col-span-3">
-        <CardContent className="pt-6">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Tasks</p>
-          <p className="text-3xl font-bold mt-1">{totalTasks}</p>
-        </CardContent>
-      </Card>
-      <Card className="lg:col-span-3">
-        <CardContent className="pt-6">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">In Progress</p>
-          <p className="text-3xl font-bold mt-1 text-blue-400">{inProgressTasks}</p>
-        </CardContent>
-      </Card>
-      <Card className="lg:col-span-3">
-        <CardContent className="pt-6">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Completed</p>
-          <p className="text-3xl font-bold mt-1 text-emerald-400">{completedTasks}</p>
-        </CardContent>
-      </Card>
+    <div className="grid grid-cols-12 gap-3">
+      {/* ── Row 1: Stat cards ── */}
+      {[
+        { label: "Projects", value: projects.length, color: "" },
+        { label: "Total Tasks", value: tasks.length, color: "" },
+        { label: "In Progress", value: inProgressTasks, color: "text-blue-400" },
+        { label: "Completed", value: completedTasks, color: "text-emerald-400" },
+      ].map((stat) => (
+        <Card key={stat.label} className="col-span-6 lg:col-span-3">
+          <CardContent className="p-4">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-widest">{stat.label}</p>
+            <p className={`text-2xl font-semibold mt-0.5 tabular-nums ${stat.color}`}>{stat.value}</p>
+          </CardContent>
+        </Card>
+      ))}
 
-      {/* Row 2: Voice Recorder (wide) + Terminal Access toggle (narrow) */}
-      <div className="lg:col-span-8">
+      {/* ── Row 2: Voice + right sidebar stack ── */}
+      <div className="col-span-12 lg:col-span-8 min-h-[280px]">
         <VoiceRecorder />
       </div>
-      <div className="lg:col-span-4 flex flex-col gap-4">
+
+      <div className="col-span-12 lg:col-span-4 grid grid-rows-[auto_1fr] gap-3 min-h-[280px]">
         <TerminalAccessToggle userId={user.id} />
         <AgentStatusPanel userId={user.id} />
       </div>
 
-      {/* Row 3: Projects table (left) + Terminal console (right) */}
-      <Card className="lg:col-span-7 overflow-hidden">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Projects</CardTitle>
+      {/* ── Row 3: Projects + Terminal ── */}
+      <Card className="col-span-12 lg:col-span-7 overflow-hidden">
+        <CardHeader className="p-4 pb-0">
+          <CardTitle className="text-xs font-mono uppercase tracking-widest text-muted-foreground">Projects</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Pending</TableHead>
-                <TableHead className="text-right">Active</TableHead>
-                <TableHead className="text-right">Done</TableHead>
+                <TableHead className="text-xs">Name</TableHead>
+                <TableHead className="text-xs">Status</TableHead>
+                <TableHead className="text-xs text-right">Total</TableHead>
+                <TableHead className="text-xs text-right">Pending</TableHead>
+                <TableHead className="text-xs text-right">Active</TableHead>
+                <TableHead className="text-xs text-right">Done</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {projects.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="font-medium text-sm">{p.name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="text-xs">
-                      {p.status ?? "active"}
-                    </Badge>
+                    <Badge variant="outline" className="text-[10px]">{p.status ?? "active"}</Badge>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{p.total_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums">{p.pending_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums">{p.in_progress_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums">{p.completed_tasks ?? 0}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">{p.total_tasks ?? 0}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">{p.pending_tasks ?? 0}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">{p.in_progress_tasks ?? 0}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">{p.completed_tasks ?? 0}</TableCell>
                 </TableRow>
               ))}
               {projects.length === 0 && (
                 <TableRow>
-                  <TableCell className="text-muted-foreground" colSpan={6}>
-                    No projects yet.
-                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm" colSpan={6}>No projects yet.</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -145,38 +129,36 @@ export default async function DashboardPage() {
         </CardContent>
       </Card>
 
-      <div className="lg:col-span-5">
+      <div className="col-span-12 lg:col-span-5">
         <TerminalConsole projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
       </div>
 
-      {/* Row 4: Tasks table — full width */}
-      <Card className="lg:col-span-12 overflow-hidden">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Tasks</CardTitle>
+      {/* ── Row 4: Tasks — full width ── */}
+      <Card className="col-span-12 overflow-hidden">
+        <CardHeader className="p-4 pb-0">
+          <CardTitle className="text-xs font-mono uppercase tracking-widest text-muted-foreground">Tasks</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Project</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Intent</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-[100px]">Actions</TableHead>
+                <TableHead className="text-xs">Project</TableHead>
+                <TableHead className="text-xs">Description</TableHead>
+                <TableHead className="text-xs">Intent</TableHead>
+                <TableHead className="text-xs">Status</TableHead>
+                <TableHead className="text-xs w-[80px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {tasks.map((t) => (
                 <TableRow key={t.id}>
-                  <TableCell className="font-medium whitespace-nowrap">{t.project_name ?? t.project_id}</TableCell>
-                  <TableCell className="max-w-xs truncate">{t.description}</TableCell>
+                  <TableCell className="font-medium text-sm whitespace-nowrap">{t.project_name ?? t.project_id}</TableCell>
+                  <TableCell className="max-w-xs truncate text-sm">{t.description}</TableCell>
                   <TableCell>
                     <span className="text-xs text-muted-foreground font-mono">{t.intent_type ?? "—"}</span>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs border ${statusVariant(t.status)}`}>
-                      {t.status}
-                    </Badge>
+                    <Badge variant="outline" className={`text-[10px] border ${statusVariant(t.status)}`}>{t.status}</Badge>
                   </TableCell>
                   <TableCell>
                     <DispatchButton taskId={t.id} />
@@ -185,9 +167,7 @@ export default async function DashboardPage() {
               ))}
               {tasks.length === 0 && (
                 <TableRow>
-                  <TableCell className="text-muted-foreground" colSpan={5}>
-                    No tasks yet.
-                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm" colSpan={5}>No tasks yet.</TableCell>
                 </TableRow>
               )}
             </TableBody>
