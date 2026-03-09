@@ -1,6 +1,6 @@
 # Login Component Design
 
-Phone-based SMS OTP authentication for CallStack using Supabase and Next.js.
+Phone-based SMS OTP authentication for Dispatch using Supabase and Next.js.
 
 ## Project Structure
 

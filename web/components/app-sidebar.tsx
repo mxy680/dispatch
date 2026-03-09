@@ -41,7 +41,7 @@ export function AppSidebar({ userDisplay }: AppSidebarProps) {
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2">
           <RiPhoneLine className="h-5 w-5 text-primary" />
-          <span className="text-lg font-bold tracking-tight">CallStack</span>
+          <span className="text-lg font-bold tracking-tight">Dispatch</span>
         </div>
       </SidebarHeader>
 

@@ -101,7 +101,7 @@ return digits
     <div className="w-full max-w-sm">
       <Card className="bg-dark-card border-dark-border">
         <CardHeader className="pb-0">
-          <h1 className="text-2xl font-semibold text-center mb-2">CallStack</h1>
+          <h1 className="text-2xl font-semibold text-center mb-2">Dispatch</h1>
           <p className="text-gray-400 text-center text-sm mb-2">
             {step === "phone"
               ? "Sign in to continue"

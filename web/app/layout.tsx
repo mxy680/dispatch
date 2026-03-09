@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 const outfit = Outfit({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
-  title: "CallStack",
+  title: "Dispatch",
   description: "Voice-controlled Claude Code orchestration",
 };
 

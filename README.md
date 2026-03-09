@@ -1,10 +1,10 @@
-# CallStack
+# Dispatch
 
 Voice-controlled Claude Code orchestration via phone call.
 
 ## What is this?
 
-CallStack lets developers manage Claude Code instances on their local machine by calling a phone number. You talk to an AI orchestrator, issue coding commands, and your local Claude Code instance executes them—no keyboard required. A web dashboard handles project management and task history.
+Dispatch lets developers manage Claude Code instances on their local machine by calling a phone number. You talk to an AI orchestrator, issue coding commands, and your local Claude Code instance executes them—no keyboard required. A web dashboard handles project management and task history.
 
 ## Features
 
@@ -42,7 +42,7 @@ CallStack lets developers manage Claude Code instances on their local machine by
                                                                                       └─────────────┘
 ```
 
-1. You call the CallStack phone number
+1. You call the Dispatch phone number
 2. Twilio receives the call and streams audio to our orchestrator
 3. Speech-to-text converts your voice to commands
 4. The orchestrator interprets intent and sends instructions to your local agent

@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     environment:
       - DEVELOPMENT_MODE=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     volumes:
       - ./server:/app
       - server-data:/app/data

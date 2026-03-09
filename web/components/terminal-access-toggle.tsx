@@ -138,7 +138,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
             <DialogDescription asChild>
               <div className="space-y-3">
                 <p className="text-sm text-gray-400 text-center">
-                  This allows CallStack to automatically execute scripts in your terminal.
+                  This allows Dispatch to automatically execute scripts in your terminal.
                 </p>
 
                 <div className="bg-black/30 rounded-lg p-3 space-y-2">
