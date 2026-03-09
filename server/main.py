@@ -35,7 +35,7 @@ from services.llm import parse_intent
 from agents.copilot_agent import dispatch_task as agent_dispatch_task
 from agents.copilot_agent import set_terminal_access, get_terminal_access
 
-app = FastAPI(title="CallStack API")
+app = FastAPI(title="Dispatch API")
 
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -686,7 +686,7 @@ async def get_terminal_command_logs(
 
 @app.get("/")
 async def root():
-    return {"status": "CallStack Agent is Listening..."}
+    return {"status": "Dispatch Agent is Listening..."}
 
 @app.get("/health")
 async def health():

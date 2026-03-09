@@ -94,13 +94,13 @@ def _apply_cd(cmd: str, current_dir: str, project_root: str) -> tuple[bool, str,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="CallStack local agent daemon (terminal bridge)")
+    parser = argparse.ArgumentParser(description="Dispatch local agent daemon (terminal bridge)")
     parser.add_argument("--backend-url", required=True, help="Backend base URL, e.g. http://localhost:8000")
     parser.add_argument("--project-id", default=None, help="Project id (optional; backend can auto-create)")
     parser.add_argument("--project-name", default=None, help="Project name (optional; defaults to folder name)")
     parser.add_argument("--project-path", required=True, help="Absolute path to the local project directory")
     parser.add_argument("--auth-token", default=None, help="Supabase access token (JWT)")
-    parser.add_argument("--agent-token", default=None, help="CallStack agent token (from Settings)")
+    parser.add_argument("--agent-token", default=None, help="Dispatch agent token (from Settings)")
     parser.add_argument(
         "--instance-token",
         default=None,
