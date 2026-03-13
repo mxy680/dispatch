@@ -29,7 +29,6 @@ for key, value in os.environ.items():
         print(f"[ENV DEBUG] {key}={masked_value}")
 
 # --- LOCAL IMPORTS ---
-from database.connection import init_database
 from database import models
 from services.llm import parse_intent
 from agents.copilot_agent import dispatch_task as agent_dispatch_task
@@ -55,11 +54,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 1. DATABASE INITIALIZATION ---
-@app.on_event("startup")
-def on_startup():
-    """Initialize the SQLite database when server starts"""
-    init_database()
+# --- 1. DATABASE (Supabase — no local init needed) ---
 
 # --- 2. GLOBAL STATE (WHISPER) ---
 print("Loading Whisper model... this might take a moment...")
@@ -452,13 +447,9 @@ async def get_user_agent_executions(user_id: str):
 @app.post("/api/agent/dispatch/{task_id}")
 async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks):
     """Manually trigger agent dispatch for a task."""
-    from database.connection import get_db_connection
-    conn = get_db_connection()
-    task_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    conn.close()
-    if not task_row:
+    task_dict = models.get_task_by_id(task_id)
+    if not task_dict:
         raise HTTPException(status_code=404, detail="Task not found")
-    task_dict = dict(task_row)
     intent_data = {
         "intent": task_dict.get("intent_type", "create_task"),
         "project_name": None,
@@ -544,15 +535,7 @@ async def local_agent_heartbeat(
     agent_user_id: str = Depends(get_current_agent_user_id),
 ):
     # Ensure the instance belongs to the same user (best-effort)
-    inst = None
-    try:
-        from database.connection import get_db_connection
-        conn = get_db_connection()
-        r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
-        conn.close()
-        inst = dict(r) if r else None
-    except Exception:
-        inst = None
+    inst = models.get_instance_by_id(request.instance_id)
     if not inst:
         raise HTTPException(status_code=404, detail="Instance not found")
     if inst.get("user_id") and inst.get("user_id") != agent_user_id:
@@ -571,13 +554,9 @@ async def local_agent_claim_next(
     Local helper pulls the next queued command for sessions bound to its instance.
     """
     # Basic ownership check
-    from database.connection import get_db_connection
-    conn = get_db_connection()
-    r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
-    conn.close()
-    if not r:
+    inst = models.get_instance_by_id(request.instance_id)
+    if not inst:
         raise HTTPException(status_code=404, detail="Instance not found")
-    inst = dict(r)
     if inst.get("user_id") and inst["user_id"] != agent_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
