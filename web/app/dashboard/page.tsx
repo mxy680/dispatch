@@ -4,7 +4,7 @@ import { VoiceRecorder } from "@/components/voice-recorder";
 import { AgentStatusPanel } from "@/components/agent-status-panel";
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { DispatchButton } from "@/components/dispatch-button";
-import { TerminalConsole } from "@/components/terminal-console";
+import { TerminalConsoleWrapper } from "@/components/terminal-console-wrapper";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -130,7 +130,7 @@ export default async function DashboardPage() {
       </Card>
 
       <div className="col-span-12 lg:col-span-5">
-        <TerminalConsole projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
+        <TerminalConsoleWrapper projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
       </div>
 
       {/* ── Row 4: Tasks — full width ── */}
