@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAuthHeader } from "@/lib/supabase/access-token";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,7 +55,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const [commands, setCommands] = useState<TerminalCommand[]>([]);
   const [activeCommandId, setActiveCommandId] = useState<string>("");
   const [logs, setLogs] = useState<TerminalLog[]>([]);
-  const [afterSeq, setAfterSeq] = useState<number | null>(null);
+  const afterSeqRef = useRef<number | null>(null);
 
   const [commandText, setCommandText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -114,7 +114,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       const auth = await getAuthHeader();
       if (!auth) return;
       const params = new URLSearchParams();
-      if (afterSeq !== null) params.set("after_sequence", String(afterSeq));
+      if (afterSeqRef.current !== null) params.set("after_sequence", String(afterSeqRef.current));
       params.set("limit", "200");
       const res = await fetch(`${backendUrl}/api/terminal/commands/${activeCommandId}/logs?${params}`, {
         headers: { ...auth },
@@ -125,7 +125,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       const next = (data.logs ?? []) as TerminalLog[];
       if (next.length > 0) {
         setLogs((prev) => [...prev, ...next]);
-        setAfterSeq(next[next.length - 1]!.sequence);
+        afterSeqRef.current = next[next.length - 1]!.sequence;
         setLogIdlePolls(0);
       } else {
         setLogIdlePolls((v) => v + 1);
@@ -133,7 +133,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     } catch {
       // ignore
     }
-  }, [backendUrl, activeCommandId, afterSeq]);
+  }, [backendUrl, activeCommandId]);
 
   useEffect(() => {
     fetchSessions();
@@ -145,7 +145,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     setCommands([]);
     setActiveCommandId("");
     setLogs([]);
-    setAfterSeq(null);
+    afterSeqRef.current = null;
     if (!selectedSessionId) return;
     fetchCommands();
     const t = setInterval(fetchCommands, 3000);
@@ -208,7 +208,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       setCommandText("");
       setActiveCommandId(data.command_id);
       setLogs([]);
-      setAfterSeq(null);
+      afterSeqRef.current = null;
       setLogIdlePolls(0);
       await fetchCommands();
     } catch (e: any) {
@@ -221,7 +221,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const selectCommand = (id: string) => {
     setActiveCommandId(id);
     setLogs([]);
-    setAfterSeq(null);
+    afterSeqRef.current = null;
   };
 
   return (

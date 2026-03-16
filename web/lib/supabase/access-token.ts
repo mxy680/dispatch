@@ -64,3 +64,12 @@ export async function getAuthHeader(): Promise<{ Authorization: string } | null>
   return { Authorization: `Bearer ${token}` };
 }
 
+export function clearAccessToken() {
+  cachedToken = null;
+  cacheTs = 0;
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(LS_KEY);
+    window.localStorage.removeItem(LS_TS_KEY);
+  }
+}
+

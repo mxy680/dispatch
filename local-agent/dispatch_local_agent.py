@@ -88,6 +88,8 @@ def _apply_cd(cmd: str, current_dir: str, project_root: str) -> tuple[bool, str,
         new_dir = os.path.abspath(target)
     else:
         new_dir = os.path.abspath(os.path.join(current_dir, target))
+    if not os.path.realpath(new_dir).startswith(os.path.realpath(project_root)):
+        return False, current_dir, f"cd: path outside project root is not allowed\n"
     if os.path.isdir(new_dir):
         return True, new_dir, f"cwd={new_dir}\n"
     return False, current_dir, f"cd: no such directory: {target}\n"

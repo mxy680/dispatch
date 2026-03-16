@@ -3,7 +3,7 @@ Stub copilot agent module.
 TODO: Implement actual Claude Code orchestration logic.
 """
 
-_terminal_access: dict[str, bool] = {}
+from database.supabase_client import get_sb
 
 
 def dispatch_task(task_id: str, intent_data: dict, terminal_granted: bool) -> dict:
@@ -18,10 +18,24 @@ def dispatch_task(task_id: str, intent_data: dict, terminal_granted: bool) -> di
 
 
 def set_terminal_access(user_id: str, granted: bool) -> None:
-    """Set whether a user has granted terminal access."""
-    _terminal_access[user_id] = granted
+    """Persist whether a user has granted terminal access to the database."""
+    sb = get_sb()
+    sb.table("user_preferences").upsert(
+        {"user_id": user_id, "terminal_access": granted},
+        on_conflict="user_id",
+    ).execute()
 
 
 def get_terminal_access(user_id: str) -> bool:
-    """Check whether a user has granted terminal access."""
-    return _terminal_access.get(user_id, False)
+    """Read whether a user has granted terminal access from the database."""
+    sb = get_sb()
+    res = (
+        sb.table("user_preferences")
+        .select("terminal_access")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if res and res.data:
+        return bool(res.data.get("terminal_access", False))
+    return False

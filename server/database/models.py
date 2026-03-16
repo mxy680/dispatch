@@ -23,7 +23,8 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
         data["phone_number"] = phone_number
     try:
         sb.table("users").upsert(data, on_conflict="id").execute()
-    except Exception:
+    except Exception as e:
+        print(f"[DB] upsert_user primary upsert failed, trying email conflict: {e}")
         sb.table("users").upsert(data, on_conflict="email").execute()
     print(f"[DB] upsert_user user_id={user_id} email={email!r} phone={phone_number!r}")
 
@@ -164,13 +165,17 @@ def log_agent_event_task(
 def get_user_tasks(user_id: str):
     sb = get_sb()
     res = sb.table("tasks").select("*, projects(name)").eq("user_id", user_id).order("created_at", desc=True).execute()
-    rows = res.data or []
-    # Flatten: {projects: {name: "foo"}} → {project_name: "foo"}
-    for row in rows:
-        proj = row.pop("projects", None)
-        row["project_name"] = proj.get("name") if proj else None
-    print(f"[DB] get_user_tasks user_id={user_id} count={len(rows)}")
-    return rows
+    raw_rows = res.data or []
+    # Flatten: {projects: {name: "foo"}} → {project_name: "foo"} (immutable reconstruction)
+    result = []
+    for row in raw_rows:
+        proj = row.get("projects")
+        result.append({
+            **{k: v for k, v in row.items() if k != "projects"},
+            "project_name": proj.get("name") if proj else None,
+        })
+    print(f"[DB] get_user_tasks user_id={user_id} count={len(result)}")
+    return result
 
 
 def get_project_tasks(project_id):
@@ -319,18 +324,24 @@ def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
         .limit(limit)
         .execute()
     )
-    rows = res.data or []
-    # Flatten nested task/project info
-    for row in rows:
-        task_info = row.pop("tasks", None)
+    raw_rows = res.data or []
+    # Flatten nested task/project info (immutable reconstruction)
+    result = []
+    for row in raw_rows:
+        task_info = row.get("tasks")
         if task_info:
-            row["task_description"] = task_info.get("description")
             proj = task_info.get("projects")
-            row["project_name"] = proj.get("name") if proj else None
+            task_description = task_info.get("description")
+            project_name = proj.get("name") if proj else None
         else:
-            row["task_description"] = None
-            row["project_name"] = None
-    return rows
+            task_description = None
+            project_name = None
+        result.append({
+            **{k: v for k, v in row.items() if k != "tasks"},
+            "task_description": task_description,
+            "project_name": project_name,
+        })
+    return result
 
 
 # ==================== INSTANCES (Local Agent Daemons) ====================

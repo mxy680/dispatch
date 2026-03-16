@@ -13,13 +13,14 @@ import {
 } from "@/components/ui/dialog";
 
 export function TerminalAccessToggle({ userId }: { userId: string }) {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [granted, setGranted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showConfirm, setShowConfirm] = useState(false);
   const [animating, setAnimating] = useState(false);
 
   useEffect(() => {
-    fetch(`http://localhost:8000/api/agent/terminal-access/${userId}`)
+    fetch(`${backendUrl}/api/agent/terminal-access/${userId}`)
       .then((r) => r.json())
       .then((d) => setGranted(d.terminal_access ?? false))
       .catch(() => {})
@@ -40,7 +41,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
     setShowConfirm(false);
     setAnimating(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/agent/terminal-access/${userId}`, {
+      const res = await fetch(`${backendUrl}/api/agent/terminal-access/${userId}`, {
         method: "POST",
       });
       if (res.ok) setGranted(true);
@@ -54,7 +55,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
   const doRevoke = async () => {
     setAnimating(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/agent/terminal-access/${userId}`, {
+      const res = await fetch(`${backendUrl}/api/agent/terminal-access/${userId}`, {
         method: "DELETE",
       });
       if (res.ok) setGranted(false);

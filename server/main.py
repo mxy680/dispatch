@@ -21,12 +21,13 @@ except Exception as e:
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
 
 # --- DEBUG: Print all environment variables ---
-print("[ENV DEBUG] All environment variables:")
-for key, value in os.environ.items():
-    if "SUPABASE" in key or "NEXT_PUBLIC" in key:
-        # Mask sensitive values
-        masked_value = value[:10] + "..." if len(value) > 10 else value
-        print(f"[ENV DEBUG] {key}={masked_value}")
+if DEVELOPMENT_MODE:
+    print("[ENV DEBUG] All environment variables:")
+    for key, value in os.environ.items():
+        if "SUPABASE" in key or "NEXT_PUBLIC" in key:
+            # Mask sensitive values
+            masked_value = value[:10] + "..." if len(value) > 10 else value
+            print(f"[ENV DEBUG] {key}={masked_value}")
 
 # --- LOCAL IMPORTS ---
 from database import models
@@ -38,7 +39,7 @@ app = FastAPI(title="Dispatch API")
 
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
 print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE}")
 print(f"[ENV] SUPABASE_URL={SUPABASE_URL[:30] + '...' if SUPABASE_URL else None}")
@@ -371,15 +372,15 @@ async def transcribe_audio(
         error_trace = traceback.format_exc()
         print(f"[TRANSCRIBE] Pipeline Error: {e!r}")
         print(f"[TRANSCRIBE] Full traceback:\n{error_trace}")
-        return {"status": "error", "message": str(e), "traceback": error_trace}
+        return {"status": "error", "message": "Internal server error"}
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 
 @app.get("/api/dashboard/{user_id}")
-async def get_dashboard(user_id: str):
-    projects = models.get_user_projects_with_task_counts(user_id)
-    tasks = models.get_user_tasks(user_id)
-    print(f"[DASHBOARD] user_id={user_id} projects={len(projects)} tasks={len(tasks)}")
+async def get_dashboard(user_id: str, user: dict = Depends(get_current_user)):
+    projects = models.get_user_projects_with_task_counts(user.id)
+    tasks = models.get_user_tasks(user.id)
+    print(f"[DASHBOARD] user_id={user.id} projects={len(projects)} tasks={len(tasks)}")
     if tasks:
         print(f"[DASHBOARD] sample_task_ids={[t.get('id') for t in tasks[:3]]}")
     return {
@@ -389,17 +390,18 @@ async def get_dashboard(user_id: str):
     }
 
 @app.get("/api/projects/{user_id}")
-async def get_user_projects(user_id: str):
-    return {"success": True, "projects": models.get_user_projects(user_id)}
+async def get_user_projects(user_id: str, user: dict = Depends(get_current_user)):
+    return {"success": True, "projects": models.get_user_projects(user.id)}
 
 @app.post("/api/projects")
-async def create_project(request: CreateProjectRequest):
-    models.upsert_user(user_id=request.user_id, email=f"{request.user_id}@local", phone_number=None)
-    pid = models.create_project(request.user_id, request.name, request.file_path)
+async def create_project(request: CreateProjectRequest, user: dict = Depends(get_current_user)):
+    models.upsert_user(user_id=user.id, email=getattr(user, "email", None) or f"{user.id}@local", phone_number=getattr(user, "phone", None))
+    pid = models.create_project(user.id, request.name, request.file_path)
     return {"success": True, "project_id": pid}
 
 @app.get("/api/projects/{project_id}/tasks")
-async def get_project_tasks(project_id: str):
+async def get_project_tasks(project_id: str, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, project_id)
     return {"success": True, "tasks": models.get_project_tasks(project_id)}
 
 @app.post("/api/tasks")
@@ -410,19 +412,19 @@ async def create_task(request: CreateTaskRequest):
     return {"success": True, "task_id": tid}
 
 @app.patch("/api/tasks/{task_id}")
-async def update_task(task_id: str, request: UpdateTaskRequest):
+async def update_task(task_id: str, request: UpdateTaskRequest, user: dict = Depends(get_current_user)):
     models.update_task_status(task_id, request.status)
     return {"success": True, "message": "Task updated"}
 
 @app.get("/api/call-sessions/{user_id}")
-async def get_call_history(user_id: str):
-    sessions = models.get_user_call_history(user_id, limit=20)
+async def get_call_history(user_id: str, user: dict = Depends(get_current_user)):
+    sessions = models.get_user_call_history(user.id, limit=20)
     return {"success": True, "sessions": sessions}
 
 # --- 7. AGENT PIPELINE ENDPOINTS ---
 
 @app.get("/api/agent/status/{task_id}")
-async def get_agent_status(task_id: str):
+async def get_agent_status(task_id: str, user: dict = Depends(get_current_user)):
     """Get agent pipeline status for a specific task."""
     executions = models.get_agent_executions(task_id)
     latest = models.get_task_agent_status(task_id)
@@ -435,9 +437,9 @@ async def get_agent_status(task_id: str):
 
 
 @app.get("/api/agent/executions/{user_id}")
-async def get_user_agent_executions(user_id: str):
+async def get_user_agent_executions(user_id: str, user: dict = Depends(get_current_user)):
     """Get all agent executions for a user."""
-    executions = models.get_user_agent_executions(user_id)
+    executions = models.get_user_agent_executions(user.id)
     return {
         "success": True,
         "executions": executions,
@@ -445,7 +447,7 @@ async def get_user_agent_executions(user_id: str):
 
 
 @app.post("/api/agent/dispatch/{task_id}")
-async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks):
+async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     """Manually trigger agent dispatch for a task."""
     task_dict = models.get_task_by_id(task_id)
     if not task_dict:
@@ -470,23 +472,23 @@ async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTask
 # --- 8. TERMINAL ACCESS ENDPOINTS ---
 
 @app.post("/api/agent/terminal-access/{user_id}")
-async def grant_terminal_access(user_id: str):
+async def grant_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User grants permission for auto-terminal execution."""
-    set_terminal_access(user_id, True)
+    set_terminal_access(user.id, True)
     return {"success": True, "terminal_access": True, "message": "Terminal access granted. Tasks will auto-execute in terminal."}
 
 
 @app.delete("/api/agent/terminal-access/{user_id}")
-async def revoke_terminal_access(user_id: str):
+async def revoke_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User revokes terminal execution permission."""
-    set_terminal_access(user_id, False)
+    set_terminal_access(user.id, False)
     return {"success": True, "terminal_access": False, "message": "Terminal access revoked."}
 
 
 @app.get("/api/agent/terminal-access/{user_id}")
-async def check_terminal_access(user_id: str):
+async def check_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """Check if user has granted terminal access."""
-    granted = get_terminal_access(user_id)
+    granted = get_terminal_access(user.id)
     return {"success": True, "terminal_access": granted}
 
 

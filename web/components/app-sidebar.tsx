@@ -22,6 +22,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { clearAccessToken } from "@/lib/supabase/access-token";
 
 const navItems = [
   { title: "Dashboard", href: "/dashboard", icon: RiDashboardLine },
@@ -79,7 +80,11 @@ export function AppSidebar({ userDisplay }: AppSidebarProps) {
         <p className="text-xs text-muted-foreground truncate mb-2">
           {userDisplay}
         </p>
-        <form action="/auth/signout" method="post">
+        <form
+          action="/auth/signout"
+          method="post"
+          onSubmit={() => clearAccessToken()}
+        >
           <button
             type="submit"
             className="flex items-center gap-2 text-xs text-muted-foreground hover:text-destructive transition-colors"
