@@ -3,6 +3,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type AgentStage = {
   stage: string;
@@ -24,9 +26,19 @@ type AgentExecution = {
   created_at: string;
 };
 
+const TEST_PROMPTS = [
+  "Create a project called my-api",
+  "Add JWT authentication to my-api",
+  "Check status of all projects",
+  "Add unit tests to my-api",
+  "Fix the login bug in my-api",
+];
+
 export function VoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [testInput, setTestInput] = useState("");
+  const [showTestPanel, setShowTestPanel] = useState(false);
 
   // Response State
   const [transcript, setTranscript] = useState<string | null>(null);
@@ -137,8 +149,9 @@ export function VoiceRecorder() {
     const formData = new FormData();
     formData.append("file", audioBlob, "audio.webm");
 
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
     try {
-      const response = await fetch("http://localhost:8000/transcribe", {
+      const response = await fetch(`${backendUrl}/transcribe`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -173,6 +186,53 @@ export function VoiceRecorder() {
       }
     } catch (error) {
       console.error("Network error:", error);
+      setActionResult("Error: Could not connect to backend.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestCommand = async (text: string) => {
+    setLoading(true);
+    setTranscript(null);
+    setIntent(null);
+    setActionResult(null);
+    setDebugInfo(null);
+    setAgentStatus(null);
+    setAgentStages([]);
+    setAgentExecutions([]);
+    setPollingTaskId(null);
+
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+    try {
+      const response = await fetch(`${backendUrl}/transcribe-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      const result = await response.json();
+      if (response.ok) {
+        setTranscript(result.transcript);
+        setIntent(result.intent);
+        setActionResult(result.action_result);
+        setDebugInfo(`Context: ${result.context_projects_count} projects loaded`);
+
+        if (result.agent_status) {
+          setAgentStatus(result.agent_status);
+          const taskId = result.created?.task_id || result.logged_task_id;
+          if (taskId) {
+            setPollingTaskId(taskId);
+            setAgentStages([
+              { stage: "refine", status: "running", output: "Refining prompt..." },
+            ]);
+          }
+        }
+        router.refresh();
+      } else {
+        setActionResult(`Error: ${result.message}`);
+      }
+    } catch {
       setActionResult("Error: Could not connect to backend.");
     } finally {
       setLoading(false);
@@ -259,6 +319,56 @@ export function VoiceRecorder() {
             ? "bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]"
             : "bg-muted-foreground/30"
         }`} />
+      </div>
+
+      {/* --- DEV TEST PANEL --- */}
+      <div className="border-b border-border">
+        <button
+          onClick={() => setShowTestPanel(!showTestPanel)}
+          className="w-full px-5 py-2 flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="font-mono">DEV: Send text command</span>
+          <span>{showTestPanel ? "\u25B2" : "\u25BC"}</span>
+        </button>
+
+        {showTestPanel && (
+          <div className="px-5 pb-4 space-y-3">
+            <div className="flex gap-2">
+              <Input
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                placeholder="Type a command..."
+                className="text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && testInput.trim() && !loading) {
+                    handleTestCommand(testInput.trim());
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                onClick={() => handleTestCommand(testInput.trim())}
+                disabled={loading || !testInput.trim()}
+              >
+                Send
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {TEST_PROMPTS.map((prompt) => (
+                <Button
+                  key={prompt}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7"
+                  disabled={loading}
+                  onClick={() => handleTestCommand(prompt)}
+                >
+                  {prompt}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* --- AGENT OUTPUT CONSOLE --- */}

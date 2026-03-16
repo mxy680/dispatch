@@ -374,6 +374,104 @@ async def transcribe_audio(
         print(f"[TRANSCRIBE] Full traceback:\n{error_trace}")
         return {"status": "error", "message": "Internal server error"}
 
+# --- 5b. TEXT COMMAND (dev mode — skips Whisper) ---
+
+class TextCommandRequest(BaseModel):
+    text: str
+
+@app.post("/transcribe-text")
+async def transcribe_text(
+    request: TextCommandRequest,
+    user: dict = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
+):
+    """Same pipeline as /transcribe but accepts text directly (skips Whisper STT)."""
+    try:
+        transcript_text = request.text.strip()
+        if not transcript_text:
+            return {"status": "error", "message": "Empty text"}
+
+        models.upsert_user(
+            user_id=user.id,
+            email=getattr(user, "email", None) or f"{user.id}@local",
+            phone_number=getattr(user, "phone", None),
+        )
+
+        user_projects = models.get_user_projects(user.id)
+        intent_data = await parse_intent(transcript_text, user_projects) or {"intent": "unknown"}
+
+        intent_type = intent_data.get("intent") or "unknown"
+        project_name = intent_data.get("project_name")
+        task_description = intent_data.get("task_description")
+
+        action_result = None
+        created = {"project_id": None, "task_id": None}
+
+        if intent_type == "create_project":
+            if project_name:
+                created["project_id"] = models.create_project(user.id, project_name)
+                action_result = f"Successfully created project '{project_name}'."
+            else:
+                action_result = "I couldn't determine a project name."
+        elif intent_type == "create_task":
+            if project_name and task_description:
+                project = models.get_project_by_name(user.id, project_name)
+                if project:
+                    models.touch_project(project["id"])
+                    created["task_id"] = models.create_task(
+                        project_id=project["id"], user_id=user.id,
+                        description=task_description, voice_command=transcript_text,
+                        raw_transcript=transcript_text, intent_type=intent_type,
+                    )
+                    action_result = f"Created task '{task_description}' in project '{project_name}'."
+                else:
+                    action_result = f"Could not find a project named '{project_name}'."
+            else:
+                action_result = "I couldn't determine the project or task from your command."
+        elif intent_type == "status_check":
+            projects_with_counts = models.get_user_projects_with_task_counts(user.id)
+            if not projects_with_counts:
+                action_result = "You don't have any projects yet."
+            else:
+                lines = [f"You have {len(projects_with_counts)} project(s):"]
+                for p in projects_with_counts:
+                    lines.append(f"  '{p['name']}' — {p['total_tasks'] or 0} task(s)")
+                action_result = "\n".join(lines)
+        else:
+            action_result = "I wasn't able to map that command to an action."
+
+        logged_task_id = models.log_agent_event_task(
+            user_id=user.id, project_name=project_name, projects=user_projects,
+            description=task_description or f"[{intent_type}] {transcript_text}",
+            raw_transcript=transcript_text, intent_type=intent_type,
+            intent_confidence=None, output_summary=action_result, voice_command=transcript_text,
+        )
+
+        dispatch_task_id = created.get("task_id") or logged_task_id
+        agent_status = None
+        terminal_granted = get_terminal_access(user.id)
+        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
+            if background_tasks:
+                background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+                agent_status = "dispatching"
+
+        return {
+            "status": "success",
+            "transcript": transcript_text,
+            "intent": intent_data,
+            "action_result": action_result,
+            "context_projects_count": len(user_projects),
+            "created": created,
+            "logged_task_id": logged_task_id,
+            "agent_status": agent_status,
+            "terminal_access": terminal_granted,
+        }
+    except Exception as e:
+        import traceback
+        print(f"[TRANSCRIBE-TEXT] Error: {traceback.format_exc()}")
+        return {"status": "error", "message": "Internal server error"}
+
+
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 
 @app.get("/api/dashboard/{user_id}")
