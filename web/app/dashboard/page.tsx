@@ -1,10 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { VoiceRecorder } from "@/components/voice-recorder";
-import { AgentStatusPanel } from "@/components/agent-status-panel";
-import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
-import { DispatchButton } from "@/components/dispatch-button";
-import { TerminalConsoleWrapper } from "@/components/terminal-console-wrapper";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -37,11 +33,22 @@ type TaskRow = {
   raw_transcript?: string | null;
 };
 
-function statusVariant(status: string) {
-  if (status === "completed" || status === "agent_completed") return "bg-emerald-500/15 text-emerald-400 border-emerald-500/20";
-  if (status === "agent_dispatched") return "bg-violet-500/15 text-violet-400 border-violet-500/20";
-  if (status === "in_progress") return "bg-blue-500/15 text-blue-400 border-blue-500/20";
-  return "bg-amber-500/15 text-amber-400 border-amber-500/20";
+function statusBadge(status: string) {
+  const styles: Record<string, string> = {
+    completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    agent_completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    in_progress: "bg-blue-500/15 text-blue-400 border-blue-500/20",
+    pending: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  };
+  return styles[status] ?? "bg-muted text-muted-foreground";
+}
+
+function timeAgo(iso: string) {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 export default async function DashboardPage() {
@@ -59,119 +66,85 @@ export default async function DashboardPage() {
   const projects = dashJson.projects ?? [];
   const tasks = dashJson.tasks ?? [];
 
-  const completedTasks = tasks.filter((t) => t.status === "completed" || t.status === "agent_completed").length;
-  const inProgressTasks = tasks.filter((t) => t.status === "in_progress").length;
-
   return (
-    <div className="grid grid-cols-12 gap-3">
-      {/* ── Row 1: Stat cards ── */}
-      {[
-        { label: "Projects", value: projects.length, color: "" },
-        { label: "Total Tasks", value: tasks.length, color: "" },
-        { label: "In Progress", value: inProgressTasks, color: "text-blue-400" },
-        { label: "Completed", value: completedTasks, color: "text-emerald-400" },
-      ].map((stat) => (
-        <Card key={stat.label} className="col-span-6 lg:col-span-3">
-          <CardContent className="p-4">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-widest">{stat.label}</p>
-            <p className={`text-2xl font-semibold mt-0.5 tabular-nums ${stat.color}`}>{stat.value}</p>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* ── Command Input ── */}
+      <VoiceRecorder />
 
-      {/* ── Row 2: Voice + right sidebar stack ── */}
-      <div className="col-span-12 lg:col-span-8 min-h-[280px]">
-        <VoiceRecorder />
-      </div>
-
-      <div className="col-span-12 lg:col-span-4 grid grid-rows-[auto_1fr] gap-3 min-h-[280px]">
-        <TerminalAccessToggle userId={user.id} />
-        <AgentStatusPanel userId={user.id} />
-      </div>
-
-      {/* ── Row 3: Projects + Terminal ── */}
-      <Card className="col-span-12 lg:col-span-7 overflow-hidden">
-        <CardHeader className="p-4 pb-0">
-          <CardTitle className="text-xs font-mono uppercase tracking-widest text-muted-foreground">Projects</CardTitle>
+      {/* ── Projects ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium">Projects</CardTitle>
+            <span className="text-xs text-muted-foreground tabular-nums">{projects.length} total</span>
+          </div>
         </CardHeader>
-        <CardContent className="p-0 pt-2">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Name</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
-                <TableHead className="text-xs text-right">Total</TableHead>
-                <TableHead className="text-xs text-right">Pending</TableHead>
-                <TableHead className="text-xs text-right">Active</TableHead>
-                <TableHead className="text-xs text-right">Done</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projects.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-medium text-sm">{p.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-[10px]">{p.status ?? "active"}</Badge>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">{p.total_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">{p.pending_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">{p.in_progress_tasks ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">{p.completed_tasks ?? 0}</TableCell>
-                </TableRow>
-              ))}
-              {projects.length === 0 && (
+        <CardContent className="p-0">
+          {projects.length === 0 ? (
+            <p className="px-6 py-8 text-sm text-muted-foreground text-center">
+              No projects yet. Try: &quot;Create a project called my-api&quot;
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell className="text-muted-foreground text-sm" colSpan={6}>No projects yet.</TableCell>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="text-right">Tasks</TableHead>
+                  <TableHead className="text-right">Done</TableHead>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {projects.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="text-right tabular-nums">{p.total_tasks ?? 0}</TableCell>
+                    <TableCell className="text-right tabular-nums text-emerald-400">{p.completed_tasks ?? 0}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
-      <div className="col-span-12 lg:col-span-5">
-        <TerminalConsoleWrapper projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
-      </div>
-
-      {/* ── Row 4: Tasks — full width ── */}
-      <Card className="col-span-12 overflow-hidden">
-        <CardHeader className="p-4 pb-0">
-          <CardTitle className="text-xs font-mono uppercase tracking-widest text-muted-foreground">Tasks</CardTitle>
+      {/* ── Recent Tasks ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium">Recent Tasks</CardTitle>
+            <span className="text-xs text-muted-foreground tabular-nums">{tasks.length} total</span>
+          </div>
         </CardHeader>
-        <CardContent className="p-0 pt-2">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Project</TableHead>
-                <TableHead className="text-xs">Description</TableHead>
-                <TableHead className="text-xs">Intent</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
-                <TableHead className="text-xs w-[80px]">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tasks.map((t) => (
-                <TableRow key={t.id}>
-                  <TableCell className="font-medium text-sm whitespace-nowrap">{t.project_name ?? t.project_id}</TableCell>
-                  <TableCell className="max-w-xs truncate text-sm">{t.description}</TableCell>
-                  <TableCell>
-                    <span className="text-xs text-muted-foreground font-mono">{t.intent_type ?? "—"}</span>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={`text-[10px] border ${statusVariant(t.status)}`}>{t.status}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <DispatchButton taskId={t.id} />
-                  </TableCell>
-                </TableRow>
+        <CardContent className="p-0">
+          {tasks.length === 0 ? (
+            <p className="px-6 py-8 text-sm text-muted-foreground text-center">
+              No tasks yet. Use the command input above to create one.
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              {tasks.slice(0, 20).map((t) => (
+                <div key={t.id} className="px-6 py-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{t.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {t.project_name ?? "Unknown project"}
+                      {t.raw_transcript && (
+                        <span className="ml-2 italic">&quot;{t.raw_transcript}&quot;</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="outline" className={`text-[10px] border ${statusBadge(t.status)}`}>
+                      {t.status}
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {timeAgo(t.created_at)}
+                    </span>
+                  </div>
+                </div>
               ))}
-              {tasks.length === 0 && (
-                <TableRow>
-                  <TableCell className="text-muted-foreground text-sm" colSpan={5}>No tasks yet.</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
