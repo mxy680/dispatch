@@ -323,25 +323,28 @@ async def transcribe_audio(
             action_result = "I wasn't able to map that command to an action."
             print("[TRANSCRIBE] unknown intent executed")
 
-        # Always store a task row for auditability of agent parsing (even if unknown)
-        logged_task_id = models.log_agent_event_task(
-            user_id=user.id,
-            project_name=project_name,
-            projects=user_projects,
-            description=task_description or f"[{intent_type}] {transcript_text}".strip(),
-            raw_transcript=transcript_text,
-            intent_type=intent_type,
-            intent_confidence=None,
-            output_summary=action_result,
-            voice_command=transcript_text,
-        )
-        print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
+        # Store audit task (skip for create_project — the project IS the artifact)
+        logged_task_id = None
+        if intent_type != "create_project":
+            fresh_projects = models.get_user_projects(user.id)
+            logged_task_id = models.log_agent_event_task(
+                user_id=user.id,
+                project_name=project_name,
+                projects=fresh_projects,
+                description=task_description or f"[{intent_type}] {transcript_text}".strip(),
+                raw_transcript=transcript_text,
+                intent_type=intent_type,
+                intent_confidence=None,
+                output_summary=action_result,
+                voice_command=transcript_text,
+            )
+            print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
 
         # --- D. DISPATCH TO AGENT PIPELINE (background) ---
         dispatch_task_id = created.get("task_id") or logged_task_id
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
-        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
+        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
@@ -440,17 +443,22 @@ async def transcribe_text(
         else:
             action_result = "I wasn't able to map that command to an action."
 
-        logged_task_id = models.log_agent_event_task(
-            user_id=user.id, project_name=project_name, projects=user_projects,
-            description=task_description or f"[{intent_type}] {transcript_text}",
-            raw_transcript=transcript_text, intent_type=intent_type,
-            intent_confidence=None, output_summary=action_result, voice_command=transcript_text,
-        )
+        # Skip audit log for create_project (the project IS the artifact)
+        logged_task_id = None
+        if intent_type != "create_project":
+            # Re-fetch projects so newly created ones are visible to the logger
+            fresh_projects = models.get_user_projects(user.id)
+            logged_task_id = models.log_agent_event_task(
+                user_id=user.id, project_name=project_name, projects=fresh_projects,
+                description=task_description or f"[{intent_type}] {transcript_text}",
+                raw_transcript=transcript_text, intent_type=intent_type,
+                intent_confidence=None, output_summary=action_result, voice_command=transcript_text,
+            )
 
         dispatch_task_id = created.get("task_id") or logged_task_id
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
-        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
+        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
@@ -460,7 +468,7 @@ async def transcribe_text(
             "transcript": transcript_text,
             "intent": intent_data,
             "action_result": action_result,
-            "context_projects_count": len(user_projects),
+            "context_projects_count": len(models.get_user_projects(user.id)),
             "created": created,
             "logged_task_id": logged_task_id,
             "agent_status": agent_status,
