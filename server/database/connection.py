@@ -35,6 +35,7 @@ def _run_migrations(conn: sqlite3.Connection):
         _ensure_column(conn, "tasks", "intent_type", "TEXT")
         _ensure_column(conn, "tasks", "intent_confidence", "REAL")
         _ensure_column(conn, "tasks", "raw_transcript", "TEXT")
+        _ensure_column(conn, "tasks", "terminal_session_id", "TEXT")
 
     if "projects" in existing_tables:
         _ensure_column(conn, "projects", "description", "TEXT")
@@ -57,9 +58,68 @@ def _run_migrations(conn: sqlite3.Connection):
                 status TEXT DEFAULT 'pending',
                 error_message TEXT,
                 execution_time_ms INTEGER,
+                terminal_command_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
                 FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+    else:
+        _ensure_column(conn, "agent_executions", "terminal_command_id", "TEXT")
+
+    # instances table upgrades (existing DBs)
+    if "instances" in existing_tables:
+        _ensure_column(conn, "instances", "user_id", "TEXT")
+        _ensure_column(conn, "instances", "instance_token", "TEXT")
+        _ensure_column(conn, "instances", "metadata", "TEXT")
+        _ensure_column(conn, "instances", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+    # terminal tables (new)
+    if "terminal_sessions" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS terminal_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                instance_id TEXT,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                closed_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (project_id) REFERENCES projects(id),
+                FOREIGN KEY (instance_id) REFERENCES instances(id)
+            )
+        """)
+
+    if "terminal_commands" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS terminal_commands (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                status TEXT DEFAULT 'queued',
+                exit_code INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES terminal_sessions(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+    if "terminal_logs" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS terminal_logs (
+                id TEXT PRIMARY KEY,
+                command_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                stream TEXT NOT NULL,
+                chunk TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (command_id) REFERENCES terminal_commands(id)
             )
         """)
 
@@ -67,6 +127,10 @@ def _run_migrations(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project_created_at ON tasks(project_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_instances_project_heartbeat ON instances(project_id, last_heartbeat)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence)")
 
 def init_database():
     conn = get_db_connection()

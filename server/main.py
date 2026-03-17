@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from supabase import create_client, Client
 from pydantic import BaseModel
+from datetime import datetime
 
 # NEW: load server/.env when running locally (uvicorn doesn't auto-load it)
 try:
@@ -122,6 +123,60 @@ class CreateTaskRequest(BaseModel):
 
 class UpdateTaskRequest(BaseModel):
     status: str
+
+class RegisterLocalAgentRequest(BaseModel):
+    project_id: str
+    instance_token: str | None = None
+    pid: int | None = None
+    metadata: dict | None = None
+
+class LocalAgentHeartbeatRequest(BaseModel):
+    instance_id: str
+    status: str = "online"
+
+class CreateTerminalSessionRequest(BaseModel):
+    project_id: str
+    name: str | None = None
+    instance_id: str | None = None
+
+class CreateTerminalCommandRequest(BaseModel):
+    command: str
+
+class AppendTerminalLogsRequest(BaseModel):
+    sequence_start: int
+    stream: str  # 'stdout' | 'stderr'
+    chunks: list[str]
+
+class CompleteTerminalCommandRequest(BaseModel):
+    status: str  # 'completed' | 'failed' | 'cancelled'
+    exit_code: int | None = None
+
+class ClaimNextCommandRequest(BaseModel):
+    instance_id: str
+
+def _require_project_owner(user_id: str, project_id: str) -> dict:
+    project = models.get_project_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return project
+
+def _require_terminal_session_owner(user_id: str, session_id: str) -> dict:
+    session = models.get_terminal_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Terminal session not found")
+    if session.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return session
+
+def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
+    cmd = models.get_terminal_command(command_id)
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    if cmd.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return cmd
 
 # --- 5. THE CORE ENDPOINT (EAR + BRAIN + HANDS) ---
 @app.post("/transcribe")
@@ -400,6 +455,167 @@ async def check_terminal_access(user_id: str):
     """Check if user has granted terminal access."""
     granted = get_terminal_access(user_id)
     return {"success": True, "terminal_access": granted}
+
+
+# --- 9. LOCAL AGENT (USER MACHINE) ENDPOINTS ---
+
+@app.post("/api/agent/local/register")
+async def register_local_agent(
+    request: RegisterLocalAgentRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Register a local helper/daemon instance for a project.
+    Auth: Supabase JWT (same as browser); in the future can be API keys.
+    """
+    _require_project_owner(user.id, request.project_id)
+    row = models.register_instance(
+        user_id=user.id,
+        project_id=request.project_id,
+        instance_token=request.instance_token,
+        pid=request.pid,
+        status="online",
+        metadata=request.metadata or {},
+    )
+    return {"success": True, "instance": row}
+
+
+@app.post("/api/agent/local/heartbeat")
+async def local_agent_heartbeat(
+    request: LocalAgentHeartbeatRequest,
+    user: dict = Depends(get_current_user),
+):
+    # Ensure the instance belongs to the same user (best-effort)
+    inst = None
+    try:
+        from database.connection import get_db_connection
+        conn = get_db_connection()
+        r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
+        conn.close()
+        inst = dict(r) if r else None
+    except Exception:
+        inst = None
+    if not inst:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    if inst.get("user_id") and inst.get("user_id") != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    models.update_instance_heartbeat(instance_id=request.instance_id, status=request.status)
+    return {"success": True, "instance_id": request.instance_id, "status": request.status, "ts": datetime.utcnow().isoformat()}
+
+
+@app.post("/api/agent/local/claim-next")
+async def local_agent_claim_next(
+    request: ClaimNextCommandRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Local helper pulls the next queued command for sessions bound to its instance.
+    """
+    # Basic ownership check
+    from database.connection import get_db_connection
+    conn = get_db_connection()
+    r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
+    conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    inst = dict(r)
+    if inst.get("user_id") and inst["user_id"] != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
+    return {"success": True, "command": cmd}
+
+
+@app.post("/api/agent/local/commands/{command_id}/append-logs")
+async def local_agent_append_logs(
+    command_id: str,
+    request: AppendTerminalLogsRequest,
+    user: dict = Depends(get_current_user),
+):
+    _require_terminal_command_owner(user.id, command_id)
+    seq = request.sequence_start
+    for chunk in request.chunks:
+        models.append_terminal_log_chunk(command_id=command_id, sequence=seq, stream=request.stream, chunk=chunk)
+        seq += 1
+    return {"success": True, "next_sequence": seq}
+
+
+@app.post("/api/agent/local/commands/{command_id}/complete")
+async def local_agent_complete_command(
+    command_id: str,
+    request: CompleteTerminalCommandRequest,
+    user: dict = Depends(get_current_user),
+):
+    _require_terminal_command_owner(user.id, command_id)
+    if request.status not in ("completed", "failed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    models.complete_terminal_command(command_id=command_id, status=request.status, exit_code=request.exit_code)
+    return {"success": True}
+
+
+# --- 10. TERMINAL (WEB UI) ENDPOINTS ---
+
+@app.get("/api/terminal/sessions/{project_id}")
+async def list_terminal_sessions(project_id: str, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, project_id)
+    sessions = models.list_terminal_sessions_for_project(user_id=user.id, project_id=project_id)
+    return {"success": True, "sessions": sessions}
+
+
+@app.post("/api/terminal/sessions")
+async def create_terminal_session(request: CreateTerminalSessionRequest, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, request.project_id)
+
+    instance_id = request.instance_id
+    if not instance_id:
+        active = models.get_active_instances_for_project(request.project_id, within_seconds=120)
+        instance_id = active[0]["id"] if active else None
+
+    session_id = models.create_terminal_session(
+        user_id=user.id,
+        project_id=request.project_id,
+        name=request.name,
+        instance_id=instance_id,
+        status="pending" if instance_id else "pending",
+    )
+    return {"success": True, "session_id": session_id, "instance_id": instance_id}
+
+
+@app.delete("/api/terminal/sessions/{session_id}")
+async def close_terminal_session(session_id: str, user: dict = Depends(get_current_user)):
+    _require_terminal_session_owner(user.id, session_id)
+    models.set_terminal_session_status(session_id, "closing", closed=False)
+    return {"success": True}
+
+
+@app.post("/api/terminal/sessions/{session_id}/commands")
+async def create_terminal_command(session_id: str, request: CreateTerminalCommandRequest, user: dict = Depends(get_current_user)):
+    session = _require_terminal_session_owner(user.id, session_id)
+    if not session.get("instance_id"):
+        # Session exists but isn't bound to a local helper yet
+        raise HTTPException(status_code=409, detail="No local agent connected for this session")
+    command_id = models.create_terminal_command(session_id=session_id, user_id=user.id, command=request.command)
+    return {"success": True, "command_id": command_id}
+
+
+@app.get("/api/terminal/sessions/{session_id}/commands")
+async def list_terminal_commands(session_id: str, user: dict = Depends(get_current_user)):
+    _require_terminal_session_owner(user.id, session_id)
+    cmds = models.list_terminal_commands_for_session(user_id=user.id, session_id=session_id, limit=200)
+    return {"success": True, "commands": cmds}
+
+
+@app.get("/api/terminal/commands/{command_id}/logs")
+async def get_terminal_command_logs(
+    command_id: str,
+    after_sequence: int | None = None,
+    limit: int = 200,
+    user: dict = Depends(get_current_user),
+):
+    _require_terminal_command_owner(user.id, command_id)
+    logs = models.get_terminal_logs_for_command(command_id=command_id, after_sequence=after_sequence, limit=limit)
+    return {"success": True, "logs": logs}
 
 
 @app.get("/")

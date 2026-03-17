@@ -4,6 +4,7 @@ import { VoiceRecorder } from "@/components/voice-recorder";
 import { AgentStatusPanel } from "@/components/agent-status-panel";
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { DispatchButton } from "@/components/dispatch-button";
+import { TerminalConsole } from "@/components/terminal-console";
 import Link from "next/link";
 
 type ProjectRow = {
@@ -165,6 +166,7 @@ export default async function DashboardPage() {
 
         <div className="space-y-6">
           <AgentStatusPanel userId={user.id} />
+          <TerminalConsole projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
         </div>
       </section>
 

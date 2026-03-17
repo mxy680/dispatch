@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
     status TEXT DEFAULT 'pending', -- 'pending', 'in_progress', 'completed', 'failed'
     assigned_to_claude_instance TEXT,
+    terminal_session_id TEXT,      -- link to terminal_sessions if this task uses a session
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -46,11 +47,57 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- 4. INSTANCES TABLE (New: Required for SRS FR-2.1 Orchestration)
 CREATE TABLE IF NOT EXISTS instances (
     id TEXT PRIMARY KEY,
+    user_id TEXT,            -- Supabase user id (for multi-tenant SaaS)
     project_id TEXT NOT NULL,
     pid INTEGER,             -- Process ID on local machine
-    status TEXT DEFAULT 'starting', -- 'running', 'stopped', 'error'
+    instance_token TEXT,     -- Token reported by local helper (stable across restarts)
+    metadata TEXT,           -- JSON blob (machine info, capabilities)
+    status TEXT DEFAULT 'starting', -- 'starting', 'online', 'offline', 'error'
     last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- 4b. TERMINAL SESSIONS (local-machine terminal sessions per project/user)
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    instance_id TEXT,        -- bound local helper instance (optional)
+    name TEXT,
+    status TEXT DEFAULT 'pending', -- 'pending', 'active', 'closing', 'closed', 'error'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    closed_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (instance_id) REFERENCES instances(id)
+);
+
+-- 4c. TERMINAL COMMANDS (auditable command history)
+CREATE TABLE IF NOT EXISTS terminal_commands (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    command TEXT NOT NULL,
+    status TEXT DEFAULT 'queued',  -- 'queued', 'running', 'completed', 'failed', 'cancelled'
+    exit_code INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES terminal_sessions(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 4d. TERMINAL LOGS (chunked stdout/stderr streaming, optional but useful for UI)
+CREATE TABLE IF NOT EXISTS terminal_logs (
+    id TEXT PRIMARY KEY,
+    command_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    stream TEXT NOT NULL,    -- 'stdout' | 'stderr'
+    chunk TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (command_id) REFERENCES terminal_commands(id)
 );
 
 -- 5. CALL SESSIONS TABLE (Updated)
@@ -109,6 +156,7 @@ CREATE TABLE IF NOT EXISTS agent_executions (
     status TEXT DEFAULT 'pending', -- 'pending', 'running', 'success', 'failed'
     error_message TEXT,
     execution_time_ms INTEGER,
+    terminal_command_id TEXT,     -- link to terminal_commands when stage='terminal'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     FOREIGN KEY (task_id) REFERENCES tasks(id)
@@ -118,3 +166,9 @@ CREATE TABLE IF NOT EXISTS agent_executions (
 CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_created_at ON tasks(project_id, created_at);
+
+-- Helpful indexes for terminal queries
+CREATE INDEX IF NOT EXISTS idx_instances_project_heartbeat ON instances(project_id, last_heartbeat);
+CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence);

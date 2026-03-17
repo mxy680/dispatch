@@ -379,10 +379,10 @@ export function VoiceRecorder() {
                     {agentStages.some(s => s.stage === "terminal" && s.status === "success") ? (
                       <>
                         <p className="text-xs font-mono text-supabase-green">
-                          ⚡ Task auto-executed in terminal
+                          ⚡ Terminal command queued for local agent
                         </p>
                         <p className="text-xs font-mono text-gray-600 mt-1">
-                          Check Terminal.app or VS Code for output. Results will appear in the dashboard.
+                          Open the dashboard Terminal panel to see output once your local agent is running.
                         </p>
                       </>
                     ) : agentStages.some(s => s.stage === "terminal" && s.status === "skipped") ? (

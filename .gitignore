@@ -17,3 +17,6 @@ server/__pycache__/main.cpython-310.pyc
 *.pyc
 web/package-lock.json
 /server/__pycache__
+server/__pycache__/main.cpython-310.pyc
+*.pyc
+web/package-lock.json

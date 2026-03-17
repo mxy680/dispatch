@@ -3,6 +3,7 @@ from __future__ import annotations
 # server/database/models.py
 from database.connection import get_db_connection
 import uuid
+import json
 from datetime import datetime
 
 # ==================== USERS ====================
@@ -230,6 +231,23 @@ def update_task_status(task_id, status):
     conn.commit()
     conn.close()
 
+
+def get_task_by_id(task_id: str) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE tasks SET terminal_session_id = ? WHERE id = ?",
+        (terminal_session_id, task_id),
+    )
+    conn.commit()
+    conn.close()
+
 # ==================== CALL SESSIONS ====================
 
 def create_call_session(user_id, phone_number):
@@ -299,6 +317,7 @@ def update_agent_execution(
     explanation: str = None,
     error_message: str = None,
     execution_time_ms: int = None,
+    terminal_command_id: str | None = None,
 ):
     conn = get_db_connection()
     completed_at = datetime.now().isoformat() if status in ("success", "failed") else None
@@ -306,10 +325,11 @@ def update_agent_execution(
         """
         UPDATE agent_executions
         SET status = ?, output_result = ?, explanation = ?,
-            error_message = ?, execution_time_ms = ?, completed_at = ?
+            error_message = ?, execution_time_ms = ?, completed_at = ?,
+            terminal_command_id = COALESCE(?, terminal_command_id)
         WHERE id = ?
         """,
-        (status, output_result, explanation, error_message, execution_time_ms, completed_at, exec_id),
+        (status, output_result, explanation, error_message, execution_time_ms, completed_at, terminal_command_id, exec_id),
     )
     conn.commit()
     conn.close()
@@ -374,5 +394,327 @@ def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
         """,
         (user_id, limit),
     ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ==================== INSTANCES (Local Agent Daemons) ====================
+
+def register_instance(
+    *,
+    user_id: str,
+    project_id: str,
+    instance_token: str | None = None,
+    pid: int | None = None,
+    status: str = "starting",
+    metadata: dict | None = None,
+) -> dict:
+    """
+    Create or update a local agent instance record.
+    Uses (project_id, instance_token) as a stable identity when provided.
+    """
+    conn = get_db_connection()
+    try:
+        existing = None
+        if instance_token:
+            existing = conn.execute(
+                "SELECT * FROM instances WHERE project_id = ? AND instance_token = ? LIMIT 1",
+                (project_id, instance_token),
+            ).fetchone()
+
+        if existing:
+            instance_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE instances
+                SET user_id = ?, pid = COALESCE(?, pid),
+                    status = ?, metadata = ?, last_heartbeat = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (user_id, pid, status, json.dumps(metadata or {}), instance_id),
+            )
+        else:
+            instance_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO instances (id, user_id, project_id, pid, instance_token, metadata, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (instance_id, user_id, project_id, pid, instance_token, json.dumps(metadata or {}), status),
+            )
+
+        conn.commit()
+        row = conn.execute("SELECT * FROM instances WHERE id = ?", (instance_id,)).fetchone()
+        return dict(row) if row else {"id": instance_id}
+    finally:
+        conn.close()
+
+
+def update_instance_heartbeat(*, instance_id: str, status: str = "online") -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE instances SET status = ?, last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?",
+        (status, instance_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_instances_for_project(project_id: str, within_seconds: int = 60) -> list[dict]:
+    """
+    Consider instances active if they've heartbeated recently.
+    SQLite datetime comparison uses 'now' and seconds offsets.
+    """
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM instances
+        WHERE project_id = ?
+          AND last_heartbeat >= datetime('now', ?)
+        ORDER BY last_heartbeat DESC
+        """,
+        (project_id, f"-{within_seconds} seconds"),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ==================== TERMINAL SESSIONS / COMMANDS / LOGS ====================
+
+def create_terminal_session(
+    *,
+    user_id: str,
+    project_id: str,
+    name: str | None = None,
+    instance_id: str | None = None,
+    status: str = "pending",
+) -> str:
+    conn = get_db_connection()
+    session_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO terminal_sessions (id, user_id, project_id, instance_id, name, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (session_id, user_id, project_id, instance_id, name, status),
+    )
+    conn.commit()
+    conn.close()
+    return session_id
+
+
+def touch_terminal_session(session_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE terminal_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_terminal_session_status(session_id: str, status: str, closed: bool = False) -> None:
+    conn = get_db_connection()
+    if closed:
+        conn.execute(
+            """
+            UPDATE terminal_sessions
+            SET status = ?, updated_at = CURRENT_TIMESTAMP, closed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, session_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE terminal_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, session_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def bind_terminal_session_instance(session_id: str, instance_id: str | None) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE terminal_sessions SET instance_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (instance_id, session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_terminal_session(session_id: str) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM terminal_sessions WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM terminal_sessions
+        WHERE user_id = ? AND project_id = ?
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (user_id, project_id),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_terminal_command(*, session_id: str, user_id: str, command: str) -> str:
+    conn = get_db_connection()
+    command_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO terminal_commands (id, session_id, user_id, command, status)
+        VALUES (?, ?, ?, ?, 'queued')
+        """,
+        (command_id, session_id, user_id, command),
+    )
+    conn.execute(
+        "UPDATE terminal_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+    conn.close()
+    return command_id
+
+
+def list_terminal_commands_for_session(*, user_id: str, session_id: str, limit: int = 100) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM terminal_commands
+        WHERE user_id = ? AND session_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (user_id, session_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_terminal_command(command_id: str) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM terminal_commands WHERE id = ?", (command_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
+    """
+    Local agent helper uses this to claim work.
+    Concurrency note: SQLite doesn't have SELECT FOR UPDATE; we use an UPDATE guard on status.
+    """
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT tc.*
+            FROM terminal_commands tc
+            JOIN terminal_sessions ts ON ts.id = tc.session_id
+            WHERE ts.instance_id = ?
+              AND tc.status = 'queued'
+            ORDER BY tc.created_at ASC
+            LIMIT 1
+            """,
+            (instance_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        command_id = row["id"]
+        res = conn.execute(
+            """
+            UPDATE terminal_commands
+            SET status = 'running', started_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'queued'
+            """,
+            (command_id,),
+        )
+        if res.rowcount != 1:
+            conn.commit()
+            return None
+        conn.commit()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def complete_terminal_command(
+    *,
+    command_id: str,
+    status: str,
+    exit_code: int | None = None,
+) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        """
+        UPDATE terminal_commands
+        SET status = ?, exit_code = ?, completed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (status, exit_code, command_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def append_terminal_log_chunk(
+    *,
+    command_id: str,
+    sequence: int,
+    stream: str,
+    chunk: str,
+) -> None:
+    conn = get_db_connection()
+    log_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO terminal_logs (id, command_id, sequence, stream, chunk)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (log_id, command_id, sequence, stream, chunk),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_terminal_logs_for_command(
+    *,
+    command_id: str,
+    after_sequence: int | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    conn = get_db_connection()
+    if after_sequence is None:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM terminal_logs
+            WHERE command_id = ?
+            ORDER BY sequence ASC
+            LIMIT ?
+            """,
+            (command_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM terminal_logs
+            WHERE command_id = ? AND sequence > ?
+            ORDER BY sequence ASC
+            LIMIT ?
+            """,
+            (command_id, after_sequence, limit),
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
