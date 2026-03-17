@@ -182,6 +182,9 @@ export default async function DashboardPage() {
       <Link href="/dashboard/history" className="text-sm text-gray-400 hover:text-white transition-colors">
         View Call History →
       </Link>
+      <Link href="/dashboard/settings" className="text-sm text-gray-400 hover:text-white transition-colors">
+        Settings →
+      </Link>
 
       <form action="/auth/signout" method="post" className="mt-8">
         <button className="text-sm text-gray-600 hover:text-red-400 transition-colors">Sign Out</button>

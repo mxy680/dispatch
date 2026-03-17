@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS instances (
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
+-- 4a. AGENT TOKENS (pair local agent without requiring Supabase JWT)
+CREATE TABLE IF NOT EXISTS agent_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    label TEXT,
+    token_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    revoked_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 -- 4b. TERMINAL SESSIONS (local-machine terminal sessions per project/user)
 CREATE TABLE IF NOT EXISTS terminal_sessions (
     id TEXT PRIMARY KEY,
@@ -169,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_created_at ON tasks(project_id, cre
 
 -- Helpful indexes for terminal queries
 CREATE INDEX IF NOT EXISTS idx_instances_project_heartbeat ON instances(project_id, last_heartbeat);
+CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_created ON agent_tokens(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence);

@@ -74,6 +74,21 @@ def _run_migrations(conn: sqlite3.Connection):
         _ensure_column(conn, "instances", "metadata", "TEXT")
         _ensure_column(conn, "instances", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
+    # agent_tokens (new)
+    if "agent_tokens" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                label TEXT,
+                token_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMP,
+                revoked_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
     # terminal tables (new)
     if "terminal_sessions" not in existing_tables:
         conn.execute("""
@@ -128,6 +143,7 @@ def _run_migrations(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project_created_at ON tasks(project_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_instances_project_heartbeat ON instances(project_id, last_heartbeat)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_created ON agent_tokens(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence)")

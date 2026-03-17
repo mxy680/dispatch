@@ -16,17 +16,23 @@ This folder contains a **local helper daemon** that runs on a user's machine and
 - Python 3.10+
 - A Supabase access token (JWT) from the CallStack web app session (for now)
 
-## Run
+## Pair and run (recommended)
+
+1) In the web app, go to **Dashboard → Settings → Agents** and click **Create agent token**.\n2) Copy the token and run:
 
 ```bash
 python3 local-agent/dispatch_local_agent.py \
   --backend-url "http://localhost:8000" \
-  --project-id "<your-project-id>" \
   --project-path "/absolute/path/to/your/project" \
-  --auth-token "<supabase_access_token>"
+  --agent-token "<agent_token_from_settings>"
 ```
 
-In development, if the backend runs with `DEVELOPMENT_MODE=true`, you can omit `--auth-token` and it will fall back to the backend mock user.
+Optional:
+
+- `--project-name "MyProject"` (otherwise the folder name is used)
+- `--project-id "<project_id>"` (if you want to bind to an existing project)
+
+In development, if the backend runs with `DEVELOPMENT_MODE=true`, the web UI calls may still work without auth, but agent pairing always uses `--agent-token`.
 
 ## Security notes
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { getAuthHeader } from "@/lib/supabase/access-token";
 
 type ProjectOption = { id: string; name: string };
 
@@ -35,14 +35,6 @@ type TerminalLog = {
   created_at: string;
 };
 
-async function getAuthHeader() {
-  const supabase = createClient();
-  const { data, error } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (!token || error) throw new Error("No auth token");
-  return { Authorization: `Bearer ${token}` };
-}
-
 export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projects[0]?.id ?? "");
@@ -69,6 +61,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
+      if (!auth) throw new Error("No auth token (please sign in again)");
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedProjectId}`, {
         headers: { ...auth },
         cache: "no-store",
@@ -90,6 +83,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     if (!selectedSessionId) return;
     try {
       const auth = await getAuthHeader();
+      if (!auth) return;
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
         headers: { ...auth },
         cache: "no-store",
@@ -107,6 +101,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     if (!activeCommandId) return;
     try {
       const auth = await getAuthHeader();
+      if (!auth) return;
       const params = new URLSearchParams();
       if (afterSeq !== null) params.set("after_sequence", String(afterSeq));
       params.set("limit", "200");
@@ -156,6 +151,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
+      if (!auth) throw new Error("No auth token (please sign in again)");
       const res = await fetch(`${backendUrl}/api/terminal/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth },
@@ -178,6 +174,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
+      if (!auth) throw new Error("No auth token (please sign in again)");
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth },

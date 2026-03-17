@@ -18,12 +18,15 @@ def _http_json(
     url: str,
     body: dict[str, Any] | None = None,
     auth_token: str | None = None,
+    agent_token: str | None = None,
     timeout_s: int = 30,
 ) -> dict[str, Any]:
     data = None
     headers = {"Content-Type": "application/json"}
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
+    if agent_token:
+        headers["X-Agent-Token"] = agent_token
     if body is not None:
         data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -39,9 +42,11 @@ def _http_json(
 @dataclass
 class Config:
     backend_url: str
-    project_id: str
+    project_id: str | None
+    project_name: str | None
     project_path: str
     auth_token: str | None
+    agent_token: str | None
     instance_token: str
     heartbeat_interval_s: int = 10
     poll_interval_s: float = 1.0
@@ -63,12 +68,38 @@ def _chunk_text(s: str, max_bytes: int) -> list[str]:
     return out
 
 
+def _is_cd_command(cmd: str) -> bool:
+    s = cmd.strip()
+    return s == "cd" or s.startswith("cd ")
+
+
+def _apply_cd(cmd: str, current_dir: str, project_root: str) -> tuple[bool, str, str]:
+    """
+    Returns: (ok, new_cwd, message)
+    """
+    s = cmd.strip()
+    if s == "cd":
+        return True, project_root, f"cwd={project_root}\n"
+    target = s[3:].strip()
+    if not target:
+        return True, project_root, f"cwd={project_root}\n"
+    if os.path.isabs(target):
+        new_dir = os.path.abspath(target)
+    else:
+        new_dir = os.path.abspath(os.path.join(current_dir, target))
+    if os.path.isdir(new_dir):
+        return True, new_dir, f"cwd={new_dir}\n"
+    return False, current_dir, f"cd: no such directory: {target}\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="CallStack local agent daemon (terminal bridge)")
     parser.add_argument("--backend-url", required=True, help="Backend base URL, e.g. http://localhost:8000")
-    parser.add_argument("--project-id", required=True, help="Project id from CallStack DB")
+    parser.add_argument("--project-id", default=None, help="Project id (optional; backend can auto-create)")
+    parser.add_argument("--project-name", default=None, help="Project name (optional; defaults to folder name)")
     parser.add_argument("--project-path", required=True, help="Absolute path to the local project directory")
     parser.add_argument("--auth-token", default=None, help="Supabase access token (JWT)")
+    parser.add_argument("--agent-token", default=None, help="CallStack agent token (from Settings)")
     parser.add_argument(
         "--instance-token",
         default=None,
@@ -85,8 +116,10 @@ def main() -> int:
     cfg = Config(
         backend_url=args.backend_url.rstrip("/"),
         project_id=args.project_id,
+        project_name=args.project_name,
         project_path=project_path,
         auth_token=args.auth_token,
+        agent_token=args.agent_token,
         instance_token=instance_token,
     )
 
@@ -98,6 +131,8 @@ def main() -> int:
         url=f"{cfg.backend_url}/api/agent/local/register",
         body={
             "project_id": cfg.project_id,
+            "project_name": cfg.project_name,
+            "project_path": cfg.project_path,
             "instance_token": cfg.instance_token,
             "pid": os.getpid(),
             "metadata": {
@@ -108,16 +143,22 @@ def main() -> int:
             },
         },
         auth_token=cfg.auth_token,
+        agent_token=cfg.agent_token,
     )
     instance = (reg.get("instance") or {}) if isinstance(reg, dict) else {}
     instance_id = instance.get("id")
     if not instance_id:
         print(f"[local-agent] ERROR: register did not return instance id: {reg}", file=sys.stderr)
         return 3
+    if isinstance(reg, dict) and reg.get("project_id"):
+        cfg.project_id = str(reg["project_id"])
+        print(f"[local-agent] registered project_id={cfg.project_id}")
     print(f"[local-agent] instance_id={instance_id}")
 
     last_heartbeat = 0.0
     next_sequence_by_command: dict[str, int] = {}
+    session_cwd: dict[str, str] = {}
+    idle_polls = 0
 
     while True:
         now = time.time()
@@ -128,6 +169,7 @@ def main() -> int:
                     url=f"{cfg.backend_url}/api/agent/local/heartbeat",
                     body={"instance_id": instance_id, "status": "online"},
                     auth_token=cfg.auth_token,
+                    agent_token=cfg.agent_token,
                 )
             except Exception as e:
                 print(f"[local-agent] heartbeat failed: {e}", file=sys.stderr)
@@ -139,6 +181,7 @@ def main() -> int:
                 url=f"{cfg.backend_url}/api/agent/local/claim-next",
                 body={"instance_id": instance_id},
                 auth_token=cfg.auth_token,
+                agent_token=cfg.agent_token,
                 timeout_s=30,
             )
         except Exception as e:
@@ -148,29 +191,50 @@ def main() -> int:
 
         cmd = claim.get("command") if isinstance(claim, dict) else None
         if not cmd:
-            time.sleep(cfg.poll_interval_s)
+            idle_polls += 1
+            # Back off when idle to reduce server load
+            sleep_s = min(5.0, cfg.poll_interval_s * (1.0 + (idle_polls * 0.1)))
+            time.sleep(sleep_s)
             continue
 
         command_id = cmd.get("id")
+        session_id = cmd.get("session_id")
         command_text = cmd.get("command") or ""
-        if not command_id or not command_text:
+        if not command_id or not command_text or not session_id:
             time.sleep(cfg.poll_interval_s)
             continue
 
+        idle_polls = 0
+
         print(f"[local-agent] running command_id={command_id} cmd={command_text!r}")
 
-        # Execute command (non-interactive) inside the project directory.
-        # For a true interactive/PTY session, this can be upgraded later.
-        proc = subprocess.Popen(
-            command_text,
-            cwd=cfg.project_path,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate()
-        exit_code = int(proc.returncode or 0)
+        cwd = session_cwd.get(session_id) or cfg.project_path
+        stdout = ""
+        stderr = ""
+        exit_code = 0
+
+        # Make `cd` persistent across commands (Cursor-like terminal semantics).
+        if _is_cd_command(command_text):
+            ok, new_cwd, msg = _apply_cd(command_text, cwd, cfg.project_path)
+            if ok:
+                session_cwd[session_id] = new_cwd
+                stdout = msg
+                exit_code = 0
+            else:
+                stderr = msg
+                exit_code = 1
+        else:
+            # Execute command (non-interactive) inside the session cwd.
+            proc = subprocess.Popen(
+                command_text,
+                cwd=cwd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, stderr = proc.communicate()
+            exit_code = int(proc.returncode or 0)
 
         # Stream logs (chunked)
         seq = next_sequence_by_command.get(command_id, 0)
@@ -183,6 +247,7 @@ def main() -> int:
                         url=f"{cfg.backend_url}/api/agent/local/commands/{command_id}/append-logs",
                         body={"sequence_start": seq, "stream": stream_name, "chunks": chunks},
                         auth_token=cfg.auth_token,
+                        agent_token=cfg.agent_token,
                     )
                     seq += len(chunks)
         except Exception as e:
@@ -197,6 +262,7 @@ def main() -> int:
                 url=f"{cfg.backend_url}/api/agent/local/commands/{command_id}/complete",
                 body={"status": status, "exit_code": exit_code},
                 auth_token=cfg.auth_token,
+                agent_token=cfg.agent_token,
             )
         except Exception as e:
             print(f"[local-agent] complete failed: {e}", file=sys.stderr)

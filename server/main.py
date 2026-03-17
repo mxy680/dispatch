@@ -109,6 +109,20 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
 
     raise HTTPException(status_code=401, detail="Missing Authorization Header")
 
+
+def get_current_agent_user_id(
+    x_agent_token: Annotated[Union[str, None], Header(alias="X-Agent-Token")] = None,
+) -> str:
+    """
+    Auth for local agents (no Supabase JWT required).
+    """
+    if not x_agent_token:
+        raise HTTPException(status_code=401, detail="Missing X-Agent-Token")
+    user_id = models.get_user_id_for_agent_token(x_agent_token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    return user_id
+
 # --- 4. REQUEST MODELS ---
 class CreateProjectRequest(BaseModel):
     user_id: str
@@ -125,7 +139,9 @@ class UpdateTaskRequest(BaseModel):
     status: str
 
 class RegisterLocalAgentRequest(BaseModel):
-    project_id: str
+    project_id: str | None = None
+    project_name: str | None = None
+    project_path: str | None = None
     instance_token: str | None = None
     pid: int | None = None
     metadata: dict | None = None
@@ -154,6 +170,9 @@ class CompleteTerminalCommandRequest(BaseModel):
 class ClaimNextCommandRequest(BaseModel):
     instance_id: str
 
+class CreateAgentTokenRequest(BaseModel):
+    label: str | None = None
+
 def _require_project_owner(user_id: str, project_id: str) -> dict:
     project = models.get_project_by_id(project_id)
     if not project:
@@ -177,6 +196,31 @@ def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
     if cmd.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     return cmd
+
+
+@app.post("/api/settings/agent-tokens")
+async def create_agent_token(request: CreateAgentTokenRequest, user: dict = Depends(get_current_user)):
+    models.upsert_user(user_id=user.id, email=getattr(user, "email", None) or f"{user.id}@local", phone_number=getattr(user, "phone", None))
+    token = models.create_agent_token(user_id=user.id, label=request.label)
+    return {"success": True, **token}
+
+
+@app.get("/api/settings/agent-tokens")
+async def list_agent_tokens(user: dict = Depends(get_current_user)):
+    tokens = models.list_agent_tokens(user_id=user.id)
+    return {"success": True, "tokens": tokens}
+
+
+@app.delete("/api/settings/agent-tokens/{token_id}")
+async def revoke_agent_token(token_id: str, user: dict = Depends(get_current_user)):
+    models.revoke_agent_token(user_id=user.id, token_id=token_id)
+    return {"success": True}
+
+
+@app.delete("/api/settings/history")
+async def delete_history(user: dict = Depends(get_current_user)):
+    counts = models.delete_user_history(user_id=user.id)
+    return {"success": True, "deleted": counts}
 
 # --- 5. THE CORE ENDPOINT (EAR + BRAIN + HANDS) ---
 @app.post("/transcribe")
@@ -462,28 +506,44 @@ async def check_terminal_access(user_id: str):
 @app.post("/api/agent/local/register")
 async def register_local_agent(
     request: RegisterLocalAgentRequest,
-    user: dict = Depends(get_current_user),
+    agent_user_id: str = Depends(get_current_agent_user_id),
 ):
     """
     Register a local helper/daemon instance for a project.
     Auth: Supabase JWT (same as browser); in the future can be API keys.
     """
-    _require_project_owner(user.id, request.project_id)
+    project_id = request.project_id
+    if project_id:
+        _require_project_owner(agent_user_id, project_id)
+    else:
+        # Create (or reuse) project automatically for minimal user friction
+        inferred_name = (request.project_name or "").strip()
+        if not inferred_name and request.project_path:
+            inferred_name = os.path.basename(request.project_path.rstrip("/")) or "Local Project"
+        if not inferred_name:
+            inferred_name = "Local Project"
+        project = models.upsert_project_by_name(
+            user_id=agent_user_id,
+            name=inferred_name,
+            file_path=request.project_path,
+        )
+        project_id = project["id"]
+
     row = models.register_instance(
-        user_id=user.id,
-        project_id=request.project_id,
+        user_id=agent_user_id,
+        project_id=project_id,
         instance_token=request.instance_token,
         pid=request.pid,
         status="online",
         metadata=request.metadata or {},
     )
-    return {"success": True, "instance": row}
+    return {"success": True, "project_id": project_id, "instance": row}
 
 
 @app.post("/api/agent/local/heartbeat")
 async def local_agent_heartbeat(
     request: LocalAgentHeartbeatRequest,
-    user: dict = Depends(get_current_user),
+    agent_user_id: str = Depends(get_current_agent_user_id),
 ):
     # Ensure the instance belongs to the same user (best-effort)
     inst = None
@@ -497,7 +557,7 @@ async def local_agent_heartbeat(
         inst = None
     if not inst:
         raise HTTPException(status_code=404, detail="Instance not found")
-    if inst.get("user_id") and inst.get("user_id") != user.id:
+    if inst.get("user_id") and inst.get("user_id") != agent_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     models.update_instance_heartbeat(instance_id=request.instance_id, status=request.status)
@@ -507,7 +567,7 @@ async def local_agent_heartbeat(
 @app.post("/api/agent/local/claim-next")
 async def local_agent_claim_next(
     request: ClaimNextCommandRequest,
-    user: dict = Depends(get_current_user),
+    agent_user_id: str = Depends(get_current_agent_user_id),
 ):
     """
     Local helper pulls the next queued command for sessions bound to its instance.
@@ -520,7 +580,7 @@ async def local_agent_claim_next(
     if not r:
         raise HTTPException(status_code=404, detail="Instance not found")
     inst = dict(r)
-    if inst.get("user_id") and inst["user_id"] != user.id:
+    if inst.get("user_id") and inst["user_id"] != agent_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
@@ -531,9 +591,9 @@ async def local_agent_claim_next(
 async def local_agent_append_logs(
     command_id: str,
     request: AppendTerminalLogsRequest,
-    user: dict = Depends(get_current_user),
+    agent_user_id: str = Depends(get_current_agent_user_id),
 ):
-    _require_terminal_command_owner(user.id, command_id)
+    _require_terminal_command_owner(agent_user_id, command_id)
     seq = request.sequence_start
     for chunk in request.chunks:
         models.append_terminal_log_chunk(command_id=command_id, sequence=seq, stream=request.stream, chunk=chunk)
@@ -545,9 +605,9 @@ async def local_agent_append_logs(
 async def local_agent_complete_command(
     command_id: str,
     request: CompleteTerminalCommandRequest,
-    user: dict = Depends(get_current_user),
+    agent_user_id: str = Depends(get_current_agent_user_id),
 ):
-    _require_terminal_command_owner(user.id, command_id)
+    _require_terminal_command_owner(agent_user_id, command_id)
     if request.status not in ("completed", "failed", "cancelled"):
         raise HTTPException(status_code=400, detail="Invalid status")
     models.complete_terminal_command(command_id=command_id, status=request.status, exit_code=request.exit_code)

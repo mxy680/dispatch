@@ -5,6 +5,8 @@ from database.connection import get_db_connection
 import uuid
 import json
 from datetime import datetime
+import hashlib
+import secrets
 
 # ==================== USERS ====================
 def upsert_user(user_id: str, email: str, phone_number: str | None = None):
@@ -93,6 +95,28 @@ def get_project_by_name(user_id, name):
     ).fetchone()
     conn.close()
     return dict(project) if project else None
+
+
+def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
+    """
+    Find project by (user_id, name) and update file_path if provided; otherwise create it.
+    """
+    existing = get_project_by_name(user_id, name)
+    if existing:
+        if file_path and (existing.get("file_path") != file_path):
+            conn = get_db_connection()
+            conn.execute(
+                "UPDATE projects SET file_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+                (file_path, existing["id"]),
+            )
+            conn.commit()
+            conn.close()
+            existing["file_path"] = file_path
+        return existing
+
+    project_id = create_project(user_id, name, file_path=file_path)
+    p = get_project_by_id(project_id)
+    return p or {"id": project_id, "user_id": user_id, "name": name, "file_path": file_path}
 
 def get_user_projects_with_task_counts(user_id):
     """Get all projects for a user with counts of tasks by status."""
@@ -718,3 +742,201 @@ def get_terminal_logs_for_command(
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ==================== AGENT TOKENS (Local Agent Pairing) ====================
+
+def _hash_agent_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_agent_token(*, user_id: str, label: str | None = None) -> dict:
+    """
+    Returns a dict with:
+      - token_id
+      - token (PLAINTEXT; only returned once)
+    """
+    conn = get_db_connection()
+    token_id = str(uuid.uuid4())
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_agent_token(token)
+    conn.execute(
+        """
+        INSERT INTO agent_tokens (id, user_id, label, token_hash)
+        VALUES (?, ?, ?, ?)
+        """,
+        (token_id, user_id, label, token_hash),
+    )
+    conn.commit()
+    conn.close()
+    return {"token_id": token_id, "token": token, "label": label}
+
+
+def list_agent_tokens(*, user_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT id, user_id, label, created_at, last_used_at, revoked_at
+        FROM agent_tokens
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def revoke_agent_token(*, user_id: str, token_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        """
+        UPDATE agent_tokens
+        SET revoked_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+        """,
+        (token_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_id_for_agent_token(token: str) -> str | None:
+    token_hash = _hash_agent_token(token)
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT id, user_id
+        FROM agent_tokens
+        WHERE token_hash = ?
+          AND revoked_at IS NULL
+        LIMIT 1
+        """,
+        (token_hash,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    token_id = row["id"]
+    user_id = row["user_id"]
+    conn.execute(
+        "UPDATE agent_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (token_id,),
+    )
+    conn.commit()
+    conn.close()
+    return user_id
+
+
+# ==================== USER DATA DELETION ====================
+
+def delete_user_history(user_id: str) -> dict:
+    """
+    Deletes user-owned activity data (not the Supabase account).
+    Returns counts for confirmation UI.
+    """
+    conn = get_db_connection()
+    try:
+        counts = {}
+        # terminal_logs via join to commands
+        counts["terminal_logs"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM terminal_logs tl
+            JOIN terminal_commands tc ON tc.id = tl.command_id
+            WHERE tc.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            DELETE FROM terminal_logs
+            WHERE command_id IN (SELECT id FROM terminal_commands WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+
+        counts["terminal_commands"] = conn.execute(
+            "SELECT COUNT(*) FROM terminal_commands WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM terminal_commands WHERE user_id = ?", (user_id,))
+
+        counts["terminal_sessions"] = conn.execute(
+            "SELECT COUNT(*) FROM terminal_sessions WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM terminal_sessions WHERE user_id = ?", (user_id,))
+
+        # agent_executions via tasks
+        counts["agent_executions"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_executions ae
+            JOIN tasks t ON t.id = ae.task_id
+            WHERE t.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            DELETE FROM agent_executions
+            WHERE task_id IN (SELECT id FROM tasks WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+
+        counts["intents"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM intents i
+            JOIN tasks t ON t.id = i.task_id
+            WHERE t.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            "DELETE FROM intents WHERE task_id IN (SELECT id FROM tasks WHERE user_id = ?)",
+            (user_id,),
+        )
+
+        counts["tasks"] = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM tasks WHERE user_id = ?", (user_id,))
+
+        counts["call_messages_log"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM call_messages_log cml
+            JOIN call_sessions cs ON cs.id = cml.call_session_id
+            WHERE cs.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            DELETE FROM call_messages_log
+            WHERE call_session_id IN (SELECT id FROM call_sessions WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+
+        counts["call_sessions"] = conn.execute(
+            "SELECT COUNT(*) FROM call_sessions WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM call_sessions WHERE user_id = ?", (user_id,))
+
+        # instances (local agents) are history-like
+        counts["instances"] = conn.execute(
+            "SELECT COUNT(*) FROM instances WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM instances WHERE user_id = ?", (user_id,))
+
+        conn.commit()
+        return counts
+    finally:
+        conn.close()
