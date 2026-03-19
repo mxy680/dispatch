@@ -3,6 +3,10 @@ import os
 import shutil
 import json
 import asyncio
+import logging
+import threading
+import time
+import uuid
 from typing import Annotated, Union, Optional
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,17 +20,66 @@ try:
     from dotenv import load_dotenv  # type: ignore
     load_dotenv()
 except Exception as e:
-    print(f"[ENV] python-dotenv not available or failed to load: {e!r}")
+    pass
 
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-# --- DEBUG: Print all environment variables ---
-print("[ENV DEBUG] All environment variables:")
+
+class AccessLogThrottleFilter(logging.Filter):
+    """
+    Keep useful access logs while suppressing repetitive high-frequency noise.
+    - Drops OPTIONS requests.
+    - Throttles repeated 200 logs for polling endpoints.
+    """
+
+    def __init__(self, window_s: float = 10.0):
+        super().__init__()
+        self.window_s = window_s
+        self._last_seen: dict[str, float] = {}
+        self._lock = threading.Lock()
+        self.noisy_paths = (
+            "/api/agent/local/claim-next",
+            "/api/agent/local/heartbeat",
+            "/api/agent/executions/",
+            "/api/terminal/commands/",
+            "/api/terminal/sessions/",
+        )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "OPTIONS " in msg:
+            return False
+
+        is_noisy = any(p in msg for p in self.noisy_paths)
+        is_ok = '" 200 OK' in msg
+        if not (is_noisy and is_ok):
+            return True
+
+        key = msg.split("HTTP/1.1")[0] if "HTTP/1.1" in msg else msg
+        now = time.time()
+        with self._lock:
+            last = self._last_seen.get(key, 0.0)
+            if now - last < self.window_s:
+                return False
+            self._last_seen[key] = now
+        return True
+
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("callstack.api")
+db_logger = logging.getLogger("callstack.db")
+
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+uvicorn_access_logger.addFilter(AccessLogThrottleFilter(window_s=10.0))
+
 for key, value in os.environ.items():
     if "SUPABASE" in key or "NEXT_PUBLIC" in key:
-        # Mask sensitive values
         masked_value = value[:10] + "..." if len(value) > 10 else value
-        print(f"[ENV DEBUG] {key}={masked_value}")
+        logger.debug("env %s=%s", key, masked_value)
 
 # --- LOCAL IMPORTS ---
 from database.connection import init_database
@@ -41,11 +94,12 @@ app = FastAPI(title="CallStack API")
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE}")
-print(f"[ENV] SUPABASE_URL={SUPABASE_URL[:30] + '...' if SUPABASE_URL else None}")
-print(f"[ENV] SUPABASE_SERVICE_KEY={'SET' if SUPABASE_SERVICE_KEY else 'NOT SET'}")
-print(f"[ENV] SUPABASE_URL_set={bool(SUPABASE_URL)} SUPABASE_SERVICE_KEY_set={bool(SUPABASE_SERVICE_KEY)}")
-print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE} SUPABASE_URL_set={bool(SUPABASE_URL)} SUPABASE_SERVICE_KEY_set={bool(SUPABASE_SERVICE_KEY)}")
+logger.info(
+    "startup env development=%s supabase_url_set=%s service_key_set=%s",
+    DEVELOPMENT_MODE,
+    bool(SUPABASE_URL),
+    bool(SUPABASE_SERVICE_KEY),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,9 +116,42 @@ def on_startup():
     init_database()
 
 # --- 2. GLOBAL STATE (WHISPER) ---
-print("Loading Whisper model... this might take a moment...")
+logger.info("loading whisper model")
 model = WhisperModel("tiny", device="cpu", compute_type="int8")
-print("Whisper model loaded!")
+logger.info("whisper model loaded")
+
+
+@app.middleware("http")
+async def request_trace_middleware(request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())[:8]
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("request_id=%s uncaught error path=%s", request_id, request.url.path)
+        raise
+
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    # Structured app logs for debugging; keep noisy paths at debug level.
+    is_noisy = (
+        request.url.path.startswith("/api/agent/local/claim-next")
+        or request.url.path.startswith("/api/agent/local/heartbeat")
+        or request.url.path.startswith("/api/agent/executions/")
+        or request.url.path.startswith("/api/terminal/commands/")
+    )
+    level = logging.DEBUG if is_noisy and response.status_code < 400 else logging.INFO
+    logger.log(
+        level,
+        "request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    response.headers["x-request-id"] = request_id
+    return response
 
 # --- 3. SECURITY ---
 def get_current_user(authorization: Annotated[Union[str, None], Header()] = None):
@@ -93,7 +180,7 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
             u = user_response.user
             return u
         except Exception as e:
-            print(f"[AUTH] Supabase auth failed err={e!r}")
+            logger.warning("supabase auth failed err=%r", e)
             raise HTTPException(status_code=401, detail="Invalid or Expired Token")
 
     # No token (or token invalid in dev): allow mock user only in dev mode
@@ -235,7 +322,7 @@ async def transcribe_audio(
     5. Dispatches to Agent Pipeline (Background)
     """
     try:
-        print(f"[TRANSCRIBE] start user_id={getattr(user, 'id', None)} filename={file.filename}")
+        logger.info("transcribe start user_id=%s filename=%s", getattr(user, "id", None), file.filename)
 
         # Ensure a corresponding users row exists (id comes from Supabase)
         models.upsert_user(
@@ -245,7 +332,7 @@ async def transcribe_audio(
         )
 
         # A. Transcribe
-        print(f"[TRANSCRIBE] Step A: Starting audio transcription")
+        logger.debug("transcribe step=a")
         temp_filename = f"temp_{file.filename}"
         with open(temp_filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -253,22 +340,22 @@ async def transcribe_audio(
         segments, info = model.transcribe(temp_filename, beam_size=5)
         transcript_text = " ".join([segment.text for segment in segments]).strip()
         os.remove(temp_filename)
-        print(f"[TRANSCRIBE] transcript='{transcript_text}'")
+        logger.debug("transcribe text_len=%s", len(transcript_text))
         
         # B. Context
-        print(f"[TRANSCRIBE] Step B: Fetching user projects")
+        logger.debug("transcribe step=b")
         user_projects = models.get_user_projects(user.id)
-        print(f"[TRANSCRIBE] context_projects_count={len(user_projects)} names={[p.get('name') for p in user_projects]}")
+        logger.debug("transcribe projects_count=%s", len(user_projects))
         # C. Parse Intent
-        print(f"[TRANSCRIBE] Step C: Parsing intent with LLM")
+        logger.debug("transcribe step=c")
         intent_data = await parse_intent(transcript_text, user_projects) or {"intent": "unknown"}
-        print(f"[TRANSCRIBE] raw_intent_data={json.dumps(intent_data, ensure_ascii=False)}")
+        logger.debug("transcribe intent=%s", intent_data.get("intent"))
         
         # Normalize for storage
         intent_type = intent_data.get("intent") or "unknown"
         project_name = intent_data.get("project_name")
         task_description = intent_data.get("task_description")
-        print(f"[TRANSCRIBE] normalized intent_type={intent_type} project_name={project_name!r} task_description={task_description!r}")
+        logger.info("transcribe intent_type=%s project_name=%r", intent_type, project_name)
 
         action_result = None
         created = {"project_id": None, "task_id": None}
@@ -279,7 +366,7 @@ async def transcribe_audio(
             if new_project_name:
                 created["project_id"] = models.create_project(user.id, new_project_name)
                 action_result = f"Successfully created project '{new_project_name}'."
-                print(f"[TRANSCRIBE] create_project created_project_id={created['project_id']}")
+                logger.info("transcribe created_project_id=%s", created["project_id"])
             else:
                 action_result = "I couldn't determine a project name."
         
@@ -287,7 +374,7 @@ async def transcribe_audio(
         elif intent_type == "create_task":
             if project_name and task_description:
                 project = models.get_project_by_name(user.id, project_name)
-                print(f"[TRANSCRIBE] lookup_project_by_name user_id={user.id} project_name={project_name!r} found={bool(project)}")
+                logger.debug("transcribe project_lookup found=%s", bool(project))
                 if project:
                     models.touch_project(project["id"])
                     created["task_id"] = models.create_task(
@@ -301,7 +388,7 @@ async def transcribe_audio(
                         output_summary=None,
                     )
                     action_result = f"Created task '{task_description}' in project '{project_name}'."
-                    print(f"[TRANSCRIBE] create_task created_task_id={created['task_id']} project_id={project['id']}")
+                    logger.info("transcribe created_task_id=%s project_id=%s", created["task_id"], project["id"])
                 else:
                     action_result = f"Could not find a project named '{project_name}'."
             else:
@@ -321,11 +408,11 @@ async def transcribe_audio(
                     done = p["completed_tasks"] or 0
                     lines.append(f"  '{p['name']}' — {total} task(s) ({pending} pending, {in_prog} in progress, {done} done)")
                 action_result = "\n".join(lines)
-            print("[TRANSCRIBE] status_check executed")
+            logger.debug("transcribe status_check")
 
         else:
             action_result = "I wasn't able to map that command to an action."
-            print("[TRANSCRIBE] unknown intent executed")
+            logger.debug("transcribe unknown intent")
 
         # Always store a task row for auditability of agent parsing (even if unknown)
         logged_task_id = models.log_agent_event_task(
@@ -339,7 +426,7 @@ async def transcribe_audio(
             output_summary=action_result,
             voice_command=transcript_text,
         )
-        print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
+        logger.info("transcribe logged_task_id=%s user_id=%s", logged_task_id, user.id)
 
         # --- D. DISPATCH TO AGENT PIPELINE (background) ---
         dispatch_task_id = created.get("task_id") or logged_task_id
@@ -349,7 +436,7 @@ async def transcribe_audio(
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
-                print(f"[TRANSCRIBE] agent pipeline dispatched in background task_id={dispatch_task_id} terminal={terminal_granted}")
+                logger.info("agent dispatch queued task_id=%s terminal=%s", dispatch_task_id, terminal_granted)
             else:
                 # Fallback: run synchronously
                 try:
@@ -357,7 +444,7 @@ async def transcribe_audio(
                     agent_status = pipeline_result.get("status", "unknown")
                 except Exception as ae:
                     agent_status = f"dispatch_error: {ae}"
-                    print(f"[TRANSCRIBE] agent dispatch error: {ae}")
+                    logger.warning("agent dispatch error task_id=%s err=%r", dispatch_task_id, ae)
 
         return {
             "status": "success",
@@ -374,8 +461,8 @@ async def transcribe_audio(
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"[TRANSCRIBE] Pipeline Error: {e!r}")
-        print(f"[TRANSCRIBE] Full traceback:\n{error_trace}")
+        logger.error("transcribe pipeline error=%r", e)
+        logger.debug("transcribe traceback=%s", error_trace)
         return {"status": "error", "message": str(e), "traceback": error_trace}
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
@@ -384,9 +471,7 @@ async def transcribe_audio(
 async def get_dashboard(user_id: str):
     projects = models.get_user_projects_with_task_counts(user_id)
     tasks = models.get_user_tasks(user_id)
-    print(f"[DASHBOARD] user_id={user_id} projects={len(projects)} tasks={len(tasks)}")
-    if tasks:
-        print(f"[DASHBOARD] sample_task_ids={[t.get('id') for t in tasks[:3]]}")
+    logger.debug("dashboard user_id=%s projects=%s tasks=%s", user_id, len(projects), len(tasks))
     return {
         "success": True,
         "projects": projects,
@@ -659,8 +744,15 @@ async def close_terminal_session(session_id: str, user: dict = Depends(get_curre
 async def create_terminal_command(session_id: str, request: CreateTerminalCommandRequest, user: dict = Depends(get_current_user)):
     session = _require_terminal_session_owner(user.id, session_id)
     if not session.get("instance_id"):
-        # Session exists but isn't bound to a local helper yet
-        raise HTTPException(status_code=409, detail="No local agent connected for this session")
+        # Try to auto-bind to latest active instance for this project.
+        project_id = session.get("project_id")
+        if project_id:
+            active = models.get_active_instances_for_project(project_id, within_seconds=180)
+            if active:
+                models.bind_terminal_session_instance(session_id, active[0]["id"])
+                session = _require_terminal_session_owner(user.id, session_id)
+        if not session.get("instance_id"):
+            raise HTTPException(status_code=409, detail="No local agent connected for this session")
     command_id = models.create_terminal_command(session_id=session_id, user_id=user.id, command=request.command)
     return {"success": True, "command_id": command_id}
 

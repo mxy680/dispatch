@@ -39,7 +39,7 @@ class TestProjects:
 class TestTasks:
     def test_create_task(self, test_db):
         pid = models.create_project("user-1", "App")
-        models.create_task(pid, "Fix bug")
+        models.create_task(pid, "user-1", "Fix bug")
 
         tasks = models.get_project_tasks(pid)
         assert len(tasks) == 1
@@ -48,14 +48,14 @@ class TestTasks:
 
     def test_create_task_with_voice_command(self, test_db):
         pid = models.create_project("user-1", "App")
-        models.create_task(pid, "Fix bug", voice_command="fix the bug on my app")
+        models.create_task(pid, "user-1", "Fix bug", voice_command="fix the bug on my app")
 
         tasks = models.get_project_tasks(pid)
         assert tasks[0]["voice_command"] == "fix the bug on my app"
 
     def test_update_task_status(self, test_db):
         pid = models.create_project("user-1", "App")
-        tid = models.create_task(pid, "Fix bug")
+        tid = models.create_task(pid, "user-1", "Fix bug")
 
         models.update_task_status(tid, "completed")
         tasks = models.get_project_tasks(pid)
@@ -64,9 +64,9 @@ class TestTasks:
 
     def test_get_user_projects_with_task_counts(self, test_db):
         pid = models.create_project("user-1", "App")
-        models.create_task(pid, "Task 1")
-        models.create_task(pid, "Task 2")
-        tid3 = models.create_task(pid, "Task 3")
+        models.create_task(pid, "user-1", "Task 1")
+        models.create_task(pid, "user-1", "Task 2")
+        tid3 = models.create_task(pid, "user-1", "Task 3")
         models.update_task_status(tid3, "completed")
 
         results = models.get_user_projects_with_task_counts("user-1")

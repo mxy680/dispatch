@@ -7,6 +7,9 @@ import json
 from datetime import datetime
 import hashlib
 import secrets
+import logging
+
+logger = logging.getLogger("callstack.db")
 
 # ==================== USERS ====================
 def upsert_user(user_id: str, email: str, phone_number: str | None = None):
@@ -38,7 +41,7 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
         )
     conn.commit()
     conn.close()
-    print(f"[DB] upsert_user user_id={user_id} email={email!r} phone={phone_number!r}")
+    logger.debug("upsert_user user_id=%s", user_id)
 
 # ==================== PROJECTS ====================
 
@@ -53,7 +56,7 @@ def create_project(user_id, name, file_path=None):
     )
     conn.commit()
     conn.close()
-    print(f"[DB] create_project id={project_id} user_id={user_id} name={name!r}")
+    logger.debug("create_project id=%s user_id=%s", project_id, user_id)
     return project_id
 
 def touch_project(project_id: str):
@@ -64,7 +67,7 @@ def touch_project(project_id: str):
     )
     conn.commit()
     conn.close()
-    print(f"[DB] touch_project project_id={project_id}")
+    logger.debug("touch_project project_id=%s", project_id)
 
 def get_user_projects(user_id):
     """Get all projects for a user."""
@@ -172,11 +175,7 @@ def create_task(
     )
     conn.commit()
     conn.close()
-    print(
-        "[DB] create_task "
-        f"id={task_id} user_id={user_id} project_id={project_id} "
-        f"intent_type={intent_type!r} desc={description!r}"
-    )
+    logger.debug("create_task id=%s user_id=%s project_id=%s", task_id, user_id, project_id)
     return task_id
 
 def log_agent_event_task(
@@ -198,9 +197,9 @@ def log_agent_event_task(
 
     if not project_id:
         project_id = create_project(user_id, "General")
-        print(f"[DB] log_agent_event_task fallback_project='General' project_id={project_id} user_id={user_id}")
+        logger.debug("log_agent_event_task fallback project_id=%s user_id=%s", project_id, user_id)
     else:
-        print(f"[DB] log_agent_event_task resolved_project_id={project_id} user_id={user_id} project_name={project_name!r}")
+        logger.debug("log_agent_event_task resolved project_id=%s user_id=%s", project_id, user_id)
 
     touch_project(project_id)
     tid = create_task(
@@ -213,7 +212,7 @@ def log_agent_event_task(
         intent_confidence=intent_confidence,
         output_summary=output_summary,
     )
-    print(f"[DB] log_agent_event_task wrote task_id={tid}")
+    logger.debug("log_agent_event_task task_id=%s", tid)
     return tid
 
 def get_user_tasks(user_id: str):
@@ -230,7 +229,7 @@ def get_user_tasks(user_id: str):
     ).fetchall()
     conn.close()
     result = [dict(r) for r in rows]
-    print(f"[DB] get_user_tasks user_id={user_id} count={len(result)}")
+    logger.debug("get_user_tasks user_id=%s count=%s", user_id, len(result))
     return result
 
 def get_project_tasks(project_id):
@@ -330,7 +329,7 @@ def create_agent_execution(
     )
     conn.commit()
     conn.close()
-    print(f"[DB] create_agent_execution id={exec_id} task_id={task_id} stage={stage}")
+    logger.debug("create_agent_execution id=%s task_id=%s stage=%s", exec_id, task_id, stage)
     return exec_id
 
 
@@ -357,7 +356,7 @@ def update_agent_execution(
     )
     conn.commit()
     conn.close()
-    print(f"[DB] update_agent_execution id={exec_id} status={status}")
+    logger.debug("update_agent_execution id=%s status=%s", exec_id, status)
 
 
 def store_agent_feedback(
@@ -379,7 +378,7 @@ def store_agent_feedback(
     )
     conn.commit()
     conn.close()
-    print(f"[DB] store_agent_feedback task_id={task_id} status={status}")
+    logger.debug("store_agent_feedback task_id=%s status=%s", task_id, status)
 
 
 def get_agent_executions(task_id: str) -> list:

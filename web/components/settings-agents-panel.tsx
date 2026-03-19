@@ -27,7 +27,8 @@ export function SettingsAgentsPanel() {
   const loadTokens = async () => {
     setErr(null);
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) return;
       const res = await fetch(`${backendUrl}/api/settings/agent-tokens`, { headers: { ...auth }, cache: "no-store" });
       const data = await res.json();
@@ -47,7 +48,8 @@ export function SettingsAgentsPanel() {
     setLoading(true);
     setErr(null);
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) {
         setErr("Please sign in again.");
         return;
@@ -73,7 +75,8 @@ export function SettingsAgentsPanel() {
     setLoading(true);
     setErr(null);
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) {
         setErr("Please sign in again.");
         return;

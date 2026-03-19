@@ -61,7 +61,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     if (!selectedProjectId) return;
     try {
       setErr(null);
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) return;
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedProjectId}`, {
         headers: { ...auth },
@@ -83,7 +84,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const fetchCommands = useCallback(async () => {
     if (!selectedSessionId) return;
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) return;
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
         headers: { ...auth },
@@ -101,7 +103,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const fetchLogs = useCallback(async () => {
     if (!activeCommandId) return;
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) return;
       const params = new URLSearchParams();
       if (afterSeq !== null) params.set("after_sequence", String(afterSeq));
@@ -157,7 +160,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     setLoading(true);
     try {
       setErr(null);
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) {
         setErr("Please sign in again.");
         return;
@@ -183,7 +187,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     setLoading(true);
     try {
       setErr(null);
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) {
         setErr("Please sign in again.");
         return;

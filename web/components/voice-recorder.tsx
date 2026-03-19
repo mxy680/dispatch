@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { getAuthHeader } from "@/lib/supabase/access-token";
 
 type AgentStage = {
   stage: string;
@@ -42,7 +42,6 @@ export function VoiceRecorder() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const router = useRouter();
-  const supabase = createClient();
 
   // Poll for agent status updates
   const pollAgentStatus = useCallback(async (taskId: string) => {
@@ -123,12 +122,9 @@ export function VoiceRecorder() {
 
   const handleUpload = async (audioBlob: Blob) => {
     setLoading(true);
-
-    const { data, error } = await supabase.auth.refreshSession();
-    const session = data.session;
-    if (!session || error) {
-      console.error("Auth Error:", error);
-      alert("Session expired. Please log in again.");
+    const auth = await getAuthHeader();
+    if (!auth) {
+      alert("Session unavailable. Please sign in again.");
       setLoading(false);
       return;
     }
@@ -140,7 +136,7 @@ export function VoiceRecorder() {
       const response = await fetch("http://localhost:8000/transcribe", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          ...auth,
         },
         body: formData,
       });

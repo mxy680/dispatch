@@ -15,7 +15,8 @@ export function SettingsDangerZone() {
     setErr(null);
     setResult(null);
     try {
-      const auth = await getAuthHeader();
+      let auth = await getAuthHeader();
+      if (!auth) auth = await getAuthHeader(true);
       if (!auth) {
         throw new Error("Please sign in again.");
       }

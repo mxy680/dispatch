@@ -27,39 +27,46 @@ function saveToStorage(token: string | null, ts: number) {
   window.localStorage.setItem(LS_TS_KEY, String(ts));
 }
 
-export async function getAccessToken(): Promise<string | null> {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function getAccessToken(forceRefresh = false): Promise<string | null> {
   loadFromStorage();
   const now = Date.now();
-  if (cachedToken && now - cacheTs < CACHE_MS) return cachedToken;
+  if (!forceRefresh && cachedToken && now - cacheTs < CACHE_MS) return cachedToken;
 
   const supabase = createClient();
 
-  // Prefer getSession (cheap, no refresh).
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token ?? null;
-  if (token) {
-    cachedToken = token;
-    cacheTs = now;
-    saveToStorage(token, now);
-    return token;
+  // Retry a few times because Supabase session hydration can be briefly delayed.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token ?? null;
+    if (token) {
+      cachedToken = token;
+      cacheTs = Date.now();
+      saveToStorage(token, cacheTs);
+      return token;
+    }
+    await sleep(100 * (attempt + 1));
   }
 
   // Fallback: refresh once if needed.
   const { data, error } = await supabase.auth.refreshSession();
-  if (error) return null;
+  if (error) return cachedToken;
   const refreshed = data.session?.access_token ?? null;
   if (refreshed) {
     cachedToken = refreshed;
-    cacheTs = now;
-    saveToStorage(refreshed, now);
+    cacheTs = Date.now();
+    saveToStorage(refreshed, cacheTs);
+    return refreshed;
   }
   // If refresh fails to produce a token, keep previous cached token as best-effort.
-  if (!refreshed && cachedToken) return cachedToken;
-  return refreshed;
+  return cachedToken;
 }
 
-export async function getAuthHeader(): Promise<{ Authorization: string } | null> {
-  const token = await getAccessToken();
+export async function getAuthHeader(forceRefresh = false): Promise<{ Authorization: string } | null> {
+  const token = await getAccessToken(forceRefresh);
   if (!token) return null;
   return { Authorization: `Bearer ${token}` };
 }
