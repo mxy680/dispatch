@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import shutil
 import json
+import asyncio
 from typing import Annotated, Union, Optional
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,7 +74,6 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
     """
     # If a real token is present, always honor it (even in dev mode)
     has_auth = bool(authorization)
-    print(f"[AUTH] DEVELOPMENT_MODE={DEVELOPMENT_MODE} has_auth={has_auth}")
 
     if has_auth:
         # If client sent a JWT, we must be able to validate it. Otherwise fail loudly.
@@ -91,7 +91,6 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
             supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
             user_response = supabase.auth.get_user(token)
             u = user_response.user
-            print(f"[AUTH] Using Supabase user id={getattr(u, 'id', None)} email={getattr(u, 'email', None)}")
             return u
         except Exception as e:
             print(f"[AUTH] Supabase auth failed err={e!r}")
@@ -103,9 +102,7 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
             id = os.environ.get("DEV_USER_ID", "test-user-123")
             email = os.environ.get("DEV_USER_EMAIL", "test@example.com")
             phone = os.environ.get("DEV_USER_PHONE", "+15551234567")
-        mu = MockUser()
-        print(f"[AUTH] Falling back to MockUser id={mu.id} email={mu.email}")
-        return mu
+        return MockUser()
 
     raise HTTPException(status_code=401, detail="Missing Authorization Header")
 
@@ -169,6 +166,7 @@ class CompleteTerminalCommandRequest(BaseModel):
 
 class ClaimNextCommandRequest(BaseModel):
     instance_id: str
+    wait_seconds: int = 20
 
 class CreateAgentTokenRequest(BaseModel):
     label: str | None = None
@@ -583,7 +581,15 @@ async def local_agent_claim_next(
     if inst.get("user_id") and inst["user_id"] != agent_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    wait_s = max(0, min(request.wait_seconds, 30))
     cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
+    if not cmd and wait_s > 0:
+        deadline = asyncio.get_running_loop().time() + wait_s
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.5)
+            cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
+            if cmd:
+                break
     return {"success": True, "command": cmd}
 
 

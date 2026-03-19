@@ -50,6 +50,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const [commandText, setCommandText] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [logIdlePolls, setLogIdlePolls] = useState(0);
 
   const selectedSession = useMemo(
     () => sessions.find((s) => s.id === selectedSessionId) ?? null,
@@ -61,7 +62,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) return;
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedProjectId}`, {
         headers: { ...auth },
         cache: "no-store",
@@ -115,6 +116,9 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       if (next.length > 0) {
         setLogs((prev) => [...prev, ...next]);
         setAfterSeq(next[next.length - 1]!.sequence);
+        setLogIdlePolls(0);
+      } else {
+        setLogIdlePolls((v) => v + 1);
       }
     } catch {
       // ignore
@@ -140,10 +144,13 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
 
   useEffect(() => {
     if (!activeCommandId) return;
+    const active = commands.find((c) => c.id === activeCommandId);
+    const isDone = active ? ["completed", "failed", "cancelled"].includes(active.status) : false;
+    if (isDone && logIdlePolls >= 3) return;
     fetchLogs();
-    const t = setInterval(fetchLogs, 1000);
+    const t = setInterval(fetchLogs, 2000);
     return () => clearInterval(t);
-  }, [fetchLogs, activeCommandId]);
+  }, [fetchLogs, activeCommandId, commands, logIdlePolls]);
 
   const createSession = async () => {
     if (!selectedProjectId) return;
@@ -151,7 +158,10 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) {
+        setErr("Please sign in again.");
+        return;
+      }
       const res = await fetch(`${backendUrl}/api/terminal/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth },
@@ -174,7 +184,10 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     try {
       setErr(null);
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) {
+        setErr("Please sign in again.");
+        return;
+      }
       const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth },
@@ -186,6 +199,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       setActiveCommandId(data.command_id);
       setLogs([]);
       setAfterSeq(null);
+      setLogIdlePolls(0);
       await fetchCommands();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to queue command");

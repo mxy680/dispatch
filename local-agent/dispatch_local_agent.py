@@ -50,6 +50,7 @@ class Config:
     instance_token: str
     heartbeat_interval_s: int = 10
     poll_interval_s: float = 1.0
+    claim_wait_seconds: int = 5
     log_chunk_bytes: int = 4000
 
 
@@ -179,10 +180,10 @@ def main() -> int:
             claim = _http_json(
                 method="POST",
                 url=f"{cfg.backend_url}/api/agent/local/claim-next",
-                body={"instance_id": instance_id},
+                body={"instance_id": instance_id, "wait_seconds": cfg.claim_wait_seconds},
                 auth_token=cfg.auth_token,
                 agent_token=cfg.agent_token,
-                timeout_s=30,
+                timeout_s=max(30, cfg.claim_wait_seconds + 10),
             )
         except Exception as e:
             print(f"[local-agent] claim-next failed: {e}", file=sys.stderr)
@@ -193,7 +194,7 @@ def main() -> int:
         if not cmd:
             idle_polls += 1
             # Back off when idle to reduce server load
-            sleep_s = min(5.0, cfg.poll_interval_s * (1.0 + (idle_polls * 0.1)))
+            sleep_s = min(15.0, cfg.poll_interval_s + (idle_polls * 0.5))
             time.sleep(sleep_s)
             continue
 

@@ -28,7 +28,7 @@ export function SettingsAgentsPanel() {
     setErr(null);
     try {
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) return;
       const res = await fetch(`${backendUrl}/api/settings/agent-tokens`, { headers: { ...auth }, cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to load agent tokens");
@@ -48,7 +48,10 @@ export function SettingsAgentsPanel() {
     setErr(null);
     try {
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) {
+        setErr("Please sign in again.");
+        return;
+      }
       const res = await fetch(`${backendUrl}/api/settings/agent-tokens`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth },
@@ -71,7 +74,10 @@ export function SettingsAgentsPanel() {
     setErr(null);
     try {
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) {
+        setErr("Please sign in again.");
+        return;
+      }
       const res = await fetch(`${backendUrl}/api/settings/agent-tokens/${id}`, { method: "DELETE", headers: { ...auth } });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail ?? "Failed to revoke token");

@@ -23,6 +23,9 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
 
   useEffect(() => {
     const fetchExecutions = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
       try {
         const res = await fetch(`http://localhost:8000/api/agent/executions/${userId}`);
         if (res.ok) {
@@ -37,7 +40,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
     };
 
     fetchExecutions();
-    const interval = setInterval(fetchExecutions, 5000);
+    const interval = setInterval(fetchExecutions, 15000);
     return () => clearInterval(interval);
   }, [userId]);
 

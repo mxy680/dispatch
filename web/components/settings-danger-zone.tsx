@@ -16,7 +16,9 @@ export function SettingsDangerZone() {
     setResult(null);
     try {
       const auth = await getAuthHeader();
-      if (!auth) throw new Error("No auth token (please sign in again)");
+      if (!auth) {
+        throw new Error("Please sign in again.");
+      }
       const res = await fetch(`${backendUrl}/api/settings/history`, { method: "DELETE", headers: { ...auth } });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to delete history");
