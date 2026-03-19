@@ -1,3 +1,4 @@
+import { DashboardPoller } from "@/components/dashboard-poller";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { VoiceRecorder } from "@/components/voice-recorder";
@@ -68,6 +69,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <DashboardPoller intervalMs={5000} />
       {/* ── Command Input ── */}
       <VoiceRecorder />
 

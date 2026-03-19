@@ -1,23 +1,10 @@
 server/.env
 server/test.mp3
-web/package-lock.json
-server/__pychache__/
+server/__pycache__/
+server/database/__pycache__/
+server/services/__pycache__/
 .DS_Store
-/server/database/__pycache__
-/server/services/__pycache__
-
-# Documentation & Claude
 docs/
 CLAUDE.md
 web/package-lock.json
-/server/__pycache__
-/server
-server/__pycache__/main.cpython-310.pyc
-/server/__pycache__
 *.pyc
-web/package-lock.json
-/server/__pycache__
-server/__pycache__/main.cpython-310.pyc
-*.pyc
-web/package-lock.json
-.env
