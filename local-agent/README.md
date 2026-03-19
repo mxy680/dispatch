@@ -1,6 +1,6 @@
-# CallStack Local Agent (Terminal Bridge)
+# Dispatch Local Agent (Terminal Bridge)
 
-This folder contains a **local helper daemon** that runs on a user's machine and connects to the hosted CallStack backend to execute terminal commands locally and stream output back.
+This folder contains a **local helper daemon** that runs on a user's machine and connects to the hosted Dispatch backend to execute terminal commands locally and stream output back.
 
 ## What it does
 
@@ -14,7 +14,7 @@ This folder contains a **local helper daemon** that runs on a user's machine and
 ## Requirements
 
 - Python 3.10+
-- A Supabase access token (JWT) from the CallStack web app session (for now)
+- A Supabase access token (JWT) from the Dispatch web app session (for now)
 
 ## Pair and run (recommended)
 

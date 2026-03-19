@@ -2,6 +2,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type AgentStage = {
   stage: string;
@@ -23,9 +26,19 @@ type AgentExecution = {
   created_at: string;
 };
 
+const TEST_PROMPTS = [
+  "Create a project called my-api",
+  "Add JWT authentication to my-api",
+  "Check status of all projects",
+  "Add unit tests to my-api",
+  "Fix the login bug in my-api",
+];
+
 export function VoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [testInput, setTestInput] = useState("");
+  const [showTestPanel, setShowTestPanel] = useState(false);
 
   // Response State
   const [transcript, setTranscript] = useState<string | null>(null);
@@ -136,8 +149,9 @@ export function VoiceRecorder() {
     const formData = new FormData();
     formData.append("file", audioBlob, "audio.webm");
 
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
     try {
-      const response = await fetch("http://localhost:8000/transcribe", {
+      const response = await fetch(`${backendUrl}/transcribe`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -172,6 +186,53 @@ export function VoiceRecorder() {
       }
     } catch (error) {
       console.error("Network error:", error);
+      setActionResult("Error: Could not connect to backend.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestCommand = async (text: string) => {
+    setLoading(true);
+    setTranscript(null);
+    setIntent(null);
+    setActionResult(null);
+    setDebugInfo(null);
+    setAgentStatus(null);
+    setAgentStages([]);
+    setAgentExecutions([]);
+    setPollingTaskId(null);
+
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+    try {
+      const response = await fetch(`${backendUrl}/transcribe-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      const result = await response.json();
+      if (response.ok) {
+        setTranscript(result.transcript);
+        setIntent(result.intent);
+        setActionResult(result.action_result);
+        setDebugInfo(`Context: ${result.context_projects_count} projects loaded`);
+
+        if (result.agent_status) {
+          setAgentStatus(result.agent_status);
+          const taskId = result.created?.task_id || result.logged_task_id;
+          if (taskId) {
+            setPollingTaskId(taskId);
+            setAgentStages([
+              { stage: "refine", status: "running", output: "Refining prompt..." },
+            ]);
+          }
+        }
+        router.refresh();
+      } else {
+        setActionResult(`Error: ${result.message}`);
+      }
+    } catch {
       setActionResult("Error: Could not connect to backend.");
     } finally {
       setLoading(false);
@@ -213,27 +274,15 @@ export function VoiceRecorder() {
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto flex flex-col items-center gap-8">
-
+    <Card className="h-full flex flex-col overflow-hidden">
       {/* --- ACTION AREA --- */}
-      <div className="flex flex-col items-center gap-4">
-        {/* Status Light */}
-        <div className={`w-3 h-3 rounded-full transition-all duration-300 ${
-          isRecording
-            ? "bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]"
-            : agentStatus === "dispatching"
-            ? "bg-yellow-500 animate-pulse shadow-[0_0_10px_rgba(234,179,8,0.6)]"
-            : agentStatus === "complete"
-            ? "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]"
-            : "bg-gray-700"
-        }`} />
-
+      <div className="flex items-center gap-5 p-5 border-b border-border">
         {/* Record Button */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={loading}
           className={`
-            w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 shadow-2xl
+            w-16 h-16 shrink-0 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg
             ${isRecording
               ? "bg-red-500/10 text-red-500 border-2 border-red-500 scale-110"
               : "bg-supabase-green text-black hover:bg-supabase-green-dark hover:scale-105"
@@ -242,33 +291,95 @@ export function VoiceRecorder() {
           `}
         >
           {loading ? (
-            <div className="w-8 h-8 border-4 border-current border-t-transparent rounded-full animate-spin" />
+            <div className="w-6 h-6 border-3 border-current border-t-transparent rounded-full animate-spin" />
           ) : isRecording ? (
-            <div className="w-8 h-8 bg-current rounded-md" />
+            <div className="w-5 h-5 bg-current rounded-sm" />
           ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
               <path d="M8.25 4.5a3.75 3.75 0 117.5 0v8.25a3.75 3.75 0 11-7.5 0V4.5z" />
               <path d="M6 10.5a.75.75 0 01.75.75v1.5a5.25 5.25 0 1010.5 0v-1.5a.75.75 0 011.5 0v1.5a6.751 6.751 0 01-6 6.709v2.291h3a.75.75 0 010 1.5h-7.5a.75.75 0 010-1.5h3v-2.291a6.751 6.751 0 01-6-6.709v-1.5A.75.75 0 016 10.5z" />
             </svg>
           )}
         </button>
 
-        <p className="text-gray-400 font-mono text-sm">
-          {loading ? "Processing..." : isRecording ? "Listening..." : "Tap to Speak"}
-        </p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Voice Command</p>
+          <p className="text-xs text-muted-foreground font-mono">
+            {loading ? "Processing audio..." : isRecording ? "Listening — tap to stop" : "Tap the mic to issue a command"}
+          </p>
+        </div>
+
+        {/* Status Light */}
+        <div className={`w-2.5 h-2.5 rounded-full shrink-0 transition-all duration-300 ${
+          isRecording
+            ? "bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]"
+            : agentStatus === "dispatching"
+            ? "bg-yellow-500 animate-pulse shadow-[0_0_10px_rgba(234,179,8,0.6)]"
+            : agentStatus === "complete"
+            ? "bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]"
+            : "bg-muted-foreground/30"
+        }`} />
+      </div>
+
+      {/* --- DEV TEST PANEL --- */}
+      <div className="border-b border-border">
+        <button
+          onClick={() => setShowTestPanel(!showTestPanel)}
+          className="w-full px-5 py-2 flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="font-mono">DEV: Send text command</span>
+          <span>{showTestPanel ? "\u25B2" : "\u25BC"}</span>
+        </button>
+
+        {showTestPanel && (
+          <div className="px-5 pb-4 space-y-3">
+            <div className="flex gap-2">
+              <Input
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                placeholder="Type a command..."
+                className="text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && testInput.trim() && !loading) {
+                    handleTestCommand(testInput.trim());
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                onClick={() => handleTestCommand(testInput.trim())}
+                disabled={loading || !testInput.trim()}
+              >
+                Send
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {TEST_PROMPTS.map((prompt) => (
+                <Button
+                  key={prompt}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7"
+                  disabled={loading}
+                  onClick={() => handleTestCommand(prompt)}
+                >
+                  {prompt}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* --- AGENT OUTPUT CONSOLE --- */}
-      {(transcript || intent) && (
-        <div className="w-full bg-dark-card border border-dark-border rounded-xl overflow-hidden shadow-xl animate-fade-in-up">
-
-          {/* Header */}
-          <div className="bg-black/40 px-4 py-2 border-b border-white/5 flex items-center justify-between">
+      {(transcript || intent) ? (
+        <div className="flex-1 overflow-auto">
+          <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 flex flex-row items-center justify-between space-y-0 pb-2">
             <span className="text-xs font-mono text-gray-500">AGENT LOGS</span>
             {debugInfo && <span className="text-xs font-mono text-gray-600">{debugInfo}</span>}
-          </div>
+          </CardHeader>
 
-          <div className="p-6 space-y-6">
+          <CardContent className="p-6 space-y-6">
 
             {/* 1. The Ear (Transcript) */}
             {transcript && (
@@ -408,9 +519,13 @@ export function VoiceRecorder() {
                 )}
               </div>
             )}
-          </div>
+          </CardContent>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <p className="text-sm text-muted-foreground">No commands yet. Record a voice command to get started.</p>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

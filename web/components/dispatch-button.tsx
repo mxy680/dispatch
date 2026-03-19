@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 export function DispatchButton({ taskId }: { taskId: string }) {
   const [dispatching, setDispatching] = useState(false);
@@ -28,14 +29,16 @@ export function DispatchButton({ taskId }: { taskId: string }) {
 
   return (
     <div className="inline-flex items-center gap-2">
-      <button
+      <Button
+        variant="outline"
+        size="sm"
         onClick={handleDispatch}
         disabled={dispatching}
         className={`
-          text-xs px-2 py-1 rounded font-mono transition-all duration-200
+          text-xs font-mono transition-all duration-200
           ${dispatching
-            ? "bg-yellow-500/20 text-yellow-400 cursor-wait"
-            : "bg-supabase-green/10 text-supabase-green hover:bg-supabase-green/20 border border-supabase-green/20"
+            ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/20 cursor-wait hover:bg-yellow-500/20 hover:text-yellow-400"
+            : "bg-supabase-green/10 text-supabase-green border-supabase-green/20 hover:bg-supabase-green/20"
           }
         `}
       >
@@ -47,7 +50,7 @@ export function DispatchButton({ taskId }: { taskId: string }) {
         ) : (
           "⚡ Dispatch to Agent"
         )}
-      </button>
+      </Button>
       {result && (
         <span className={`text-xs font-mono animate-fade-in-up ${
           result.startsWith("✓") ? "text-green-400" : "text-red-400"

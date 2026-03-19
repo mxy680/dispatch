@@ -21,25 +21,25 @@ except Exception as e:
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
 
 # --- DEBUG: Print all environment variables ---
-print("[ENV DEBUG] All environment variables:")
-for key, value in os.environ.items():
-    if "SUPABASE" in key or "NEXT_PUBLIC" in key:
-        # Mask sensitive values
-        masked_value = value[:10] + "..." if len(value) > 10 else value
-        print(f"[ENV DEBUG] {key}={masked_value}")
+if DEVELOPMENT_MODE:
+    print("[ENV DEBUG] All environment variables:")
+    for key, value in os.environ.items():
+        if "SUPABASE" in key or "NEXT_PUBLIC" in key:
+            # Mask sensitive values
+            masked_value = value[:10] + "..." if len(value) > 10 else value
+            print(f"[ENV DEBUG] {key}={masked_value}")
 
 # --- LOCAL IMPORTS ---
-from database.connection import init_database
 from database import models
 from services.llm import parse_intent
 from agents.copilot_agent import dispatch_task as agent_dispatch_task
 from agents.copilot_agent import set_terminal_access, get_terminal_access
 
-app = FastAPI(title="CallStack API")
+app = FastAPI(title="Dispatch API")
 
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
 print(f"[ENV] DEVELOPMENT_MODE={DEVELOPMENT_MODE}")
 print(f"[ENV] SUPABASE_URL={SUPABASE_URL[:30] + '...' if SUPABASE_URL else None}")
@@ -55,11 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 1. DATABASE INITIALIZATION ---
-@app.on_event("startup")
-def on_startup():
-    """Initialize the SQLite database when server starts"""
-    init_database()
+# --- 1. DATABASE (Supabase — no local init needed) ---
 
 # --- 2. GLOBAL STATE (WHISPER) ---
 print("Loading Whisper model... this might take a moment...")
@@ -327,25 +323,28 @@ async def transcribe_audio(
             action_result = "I wasn't able to map that command to an action."
             print("[TRANSCRIBE] unknown intent executed")
 
-        # Always store a task row for auditability of agent parsing (even if unknown)
-        logged_task_id = models.log_agent_event_task(
-            user_id=user.id,
-            project_name=project_name,
-            projects=user_projects,
-            description=task_description or f"[{intent_type}] {transcript_text}".strip(),
-            raw_transcript=transcript_text,
-            intent_type=intent_type,
-            intent_confidence=None,
-            output_summary=action_result,
-            voice_command=transcript_text,
-        )
-        print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
+        # Store audit task (skip for create_project — the project IS the artifact)
+        logged_task_id = None
+        if intent_type != "create_project":
+            fresh_projects = models.get_user_projects(user.id)
+            logged_task_id = models.log_agent_event_task(
+                user_id=user.id,
+                project_name=project_name,
+                projects=fresh_projects,
+                description=task_description or f"[{intent_type}] {transcript_text}".strip(),
+                raw_transcript=transcript_text,
+                intent_type=intent_type,
+                intent_confidence=None,
+                output_summary=action_result,
+                voice_command=transcript_text,
+            )
+            print(f"[TRANSCRIBE] log_agent_event_task wrote task_id={logged_task_id} user_id={user.id}")
 
         # --- D. DISPATCH TO AGENT PIPELINE (background) ---
         dispatch_task_id = created.get("task_id") or logged_task_id
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
-        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
+        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
@@ -376,15 +375,118 @@ async def transcribe_audio(
         error_trace = traceback.format_exc()
         print(f"[TRANSCRIBE] Pipeline Error: {e!r}")
         print(f"[TRANSCRIBE] Full traceback:\n{error_trace}")
-        return {"status": "error", "message": str(e), "traceback": error_trace}
+        return {"status": "error", "message": "Internal server error"}
+
+# --- 5b. TEXT COMMAND (dev mode — skips Whisper) ---
+
+class TextCommandRequest(BaseModel):
+    text: str
+
+@app.post("/transcribe-text")
+async def transcribe_text(
+    request: TextCommandRequest,
+    user: dict = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
+):
+    """Same pipeline as /transcribe but accepts text directly (skips Whisper STT)."""
+    try:
+        transcript_text = request.text.strip()
+        if not transcript_text:
+            return {"status": "error", "message": "Empty text"}
+
+        models.upsert_user(
+            user_id=user.id,
+            email=getattr(user, "email", None) or f"{user.id}@local",
+            phone_number=getattr(user, "phone", None),
+        )
+
+        user_projects = models.get_user_projects(user.id)
+        intent_data = await parse_intent(transcript_text, user_projects) or {"intent": "unknown"}
+
+        intent_type = intent_data.get("intent") or "unknown"
+        project_name = intent_data.get("project_name")
+        task_description = intent_data.get("task_description")
+
+        action_result = None
+        created = {"project_id": None, "task_id": None}
+
+        if intent_type == "create_project":
+            if project_name:
+                created["project_id"] = models.create_project(user.id, project_name)
+                action_result = f"Successfully created project '{project_name}'."
+            else:
+                action_result = "I couldn't determine a project name."
+        elif intent_type == "create_task":
+            if project_name and task_description:
+                project = models.get_project_by_name(user.id, project_name)
+                if project:
+                    models.touch_project(project["id"])
+                    created["task_id"] = models.create_task(
+                        project_id=project["id"], user_id=user.id,
+                        description=task_description, voice_command=transcript_text,
+                        raw_transcript=transcript_text, intent_type=intent_type,
+                    )
+                    action_result = f"Created task '{task_description}' in project '{project_name}'."
+                else:
+                    action_result = f"Could not find a project named '{project_name}'."
+            else:
+                action_result = "I couldn't determine the project or task from your command."
+        elif intent_type == "status_check":
+            projects_with_counts = models.get_user_projects_with_task_counts(user.id)
+            if not projects_with_counts:
+                action_result = "You don't have any projects yet."
+            else:
+                lines = [f"You have {len(projects_with_counts)} project(s):"]
+                for p in projects_with_counts:
+                    lines.append(f"  '{p['name']}' — {p['total_tasks'] or 0} task(s)")
+                action_result = "\n".join(lines)
+        else:
+            action_result = "I wasn't able to map that command to an action."
+
+        # Skip audit log for create_project (the project IS the artifact)
+        logged_task_id = None
+        if intent_type != "create_project":
+            # Re-fetch projects so newly created ones are visible to the logger
+            fresh_projects = models.get_user_projects(user.id)
+            logged_task_id = models.log_agent_event_task(
+                user_id=user.id, project_name=project_name, projects=fresh_projects,
+                description=task_description or f"[{intent_type}] {transcript_text}",
+                raw_transcript=transcript_text, intent_type=intent_type,
+                intent_confidence=None, output_summary=action_result, voice_command=transcript_text,
+            )
+
+        dispatch_task_id = created.get("task_id") or logged_task_id
+        agent_status = None
+        terminal_granted = get_terminal_access(user.id)
+        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
+            if background_tasks:
+                background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+                agent_status = "dispatching"
+
+        return {
+            "status": "success",
+            "transcript": transcript_text,
+            "intent": intent_data,
+            "action_result": action_result,
+            "context_projects_count": len(models.get_user_projects(user.id)),
+            "created": created,
+            "logged_task_id": logged_task_id,
+            "agent_status": agent_status,
+            "terminal_access": terminal_granted,
+        }
+    except Exception as e:
+        import traceback
+        print(f"[TRANSCRIBE-TEXT] Error: {traceback.format_exc()}")
+        return {"status": "error", "message": "Internal server error"}
+
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 
 @app.get("/api/dashboard/{user_id}")
-async def get_dashboard(user_id: str):
-    projects = models.get_user_projects_with_task_counts(user_id)
-    tasks = models.get_user_tasks(user_id)
-    print(f"[DASHBOARD] user_id={user_id} projects={len(projects)} tasks={len(tasks)}")
+async def get_dashboard(user_id: str, user: dict = Depends(get_current_user)):
+    projects = models.get_user_projects_with_task_counts(user.id)
+    tasks = models.get_user_tasks(user.id)
+    print(f"[DASHBOARD] user_id={user.id} projects={len(projects)} tasks={len(tasks)}")
     if tasks:
         print(f"[DASHBOARD] sample_task_ids={[t.get('id') for t in tasks[:3]]}")
     return {
@@ -394,17 +496,18 @@ async def get_dashboard(user_id: str):
     }
 
 @app.get("/api/projects/{user_id}")
-async def get_user_projects(user_id: str):
-    return {"success": True, "projects": models.get_user_projects(user_id)}
+async def get_user_projects(user_id: str, user: dict = Depends(get_current_user)):
+    return {"success": True, "projects": models.get_user_projects(user.id)}
 
 @app.post("/api/projects")
-async def create_project(request: CreateProjectRequest):
-    models.upsert_user(user_id=request.user_id, email=f"{request.user_id}@local", phone_number=None)
-    pid = models.create_project(request.user_id, request.name, request.file_path)
+async def create_project(request: CreateProjectRequest, user: dict = Depends(get_current_user)):
+    models.upsert_user(user_id=user.id, email=getattr(user, "email", None) or f"{user.id}@local", phone_number=getattr(user, "phone", None))
+    pid = models.create_project(user.id, request.name, request.file_path)
     return {"success": True, "project_id": pid}
 
 @app.get("/api/projects/{project_id}/tasks")
-async def get_project_tasks(project_id: str):
+async def get_project_tasks(project_id: str, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, project_id)
     return {"success": True, "tasks": models.get_project_tasks(project_id)}
 
 @app.post("/api/tasks")
@@ -415,19 +518,19 @@ async def create_task(request: CreateTaskRequest):
     return {"success": True, "task_id": tid}
 
 @app.patch("/api/tasks/{task_id}")
-async def update_task(task_id: str, request: UpdateTaskRequest):
+async def update_task(task_id: str, request: UpdateTaskRequest, user: dict = Depends(get_current_user)):
     models.update_task_status(task_id, request.status)
     return {"success": True, "message": "Task updated"}
 
 @app.get("/api/call-sessions/{user_id}")
-async def get_call_history(user_id: str):
-    sessions = models.get_user_call_history(user_id, limit=20)
+async def get_call_history(user_id: str, user: dict = Depends(get_current_user)):
+    sessions = models.get_user_call_history(user.id, limit=20)
     return {"success": True, "sessions": sessions}
 
 # --- 7. AGENT PIPELINE ENDPOINTS ---
 
 @app.get("/api/agent/status/{task_id}")
-async def get_agent_status(task_id: str):
+async def get_agent_status(task_id: str, user: dict = Depends(get_current_user)):
     """Get agent pipeline status for a specific task."""
     executions = models.get_agent_executions(task_id)
     latest = models.get_task_agent_status(task_id)
@@ -440,9 +543,9 @@ async def get_agent_status(task_id: str):
 
 
 @app.get("/api/agent/executions/{user_id}")
-async def get_user_agent_executions(user_id: str):
+async def get_user_agent_executions(user_id: str, user: dict = Depends(get_current_user)):
     """Get all agent executions for a user."""
-    executions = models.get_user_agent_executions(user_id)
+    executions = models.get_user_agent_executions(user.id)
     return {
         "success": True,
         "executions": executions,
@@ -450,15 +553,11 @@ async def get_user_agent_executions(user_id: str):
 
 
 @app.post("/api/agent/dispatch/{task_id}")
-async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks):
+async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     """Manually trigger agent dispatch for a task."""
-    from database.connection import get_db_connection
-    conn = get_db_connection()
-    task_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    conn.close()
-    if not task_row:
+    task_dict = models.get_task_by_id(task_id)
+    if not task_dict:
         raise HTTPException(status_code=404, detail="Task not found")
-    task_dict = dict(task_row)
     intent_data = {
         "intent": task_dict.get("intent_type", "create_task"),
         "project_name": None,
@@ -479,23 +578,23 @@ async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTask
 # --- 8. TERMINAL ACCESS ENDPOINTS ---
 
 @app.post("/api/agent/terminal-access/{user_id}")
-async def grant_terminal_access(user_id: str):
+async def grant_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User grants permission for auto-terminal execution."""
-    set_terminal_access(user_id, True)
+    set_terminal_access(user.id, True)
     return {"success": True, "terminal_access": True, "message": "Terminal access granted. Tasks will auto-execute in terminal."}
 
 
 @app.delete("/api/agent/terminal-access/{user_id}")
-async def revoke_terminal_access(user_id: str):
+async def revoke_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User revokes terminal execution permission."""
-    set_terminal_access(user_id, False)
+    set_terminal_access(user.id, False)
     return {"success": True, "terminal_access": False, "message": "Terminal access revoked."}
 
 
 @app.get("/api/agent/terminal-access/{user_id}")
-async def check_terminal_access(user_id: str):
+async def check_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """Check if user has granted terminal access."""
-    granted = get_terminal_access(user_id)
+    granted = get_terminal_access(user.id)
     return {"success": True, "terminal_access": granted}
 
 
@@ -544,15 +643,7 @@ async def local_agent_heartbeat(
     agent_user_id: str = Depends(get_current_agent_user_id),
 ):
     # Ensure the instance belongs to the same user (best-effort)
-    inst = None
-    try:
-        from database.connection import get_db_connection
-        conn = get_db_connection()
-        r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
-        conn.close()
-        inst = dict(r) if r else None
-    except Exception:
-        inst = None
+    inst = models.get_instance_by_id(request.instance_id)
     if not inst:
         raise HTTPException(status_code=404, detail="Instance not found")
     if inst.get("user_id") and inst.get("user_id") != agent_user_id:
@@ -571,13 +662,9 @@ async def local_agent_claim_next(
     Local helper pulls the next queued command for sessions bound to its instance.
     """
     # Basic ownership check
-    from database.connection import get_db_connection
-    conn = get_db_connection()
-    r = conn.execute("SELECT * FROM instances WHERE id = ?", (request.instance_id,)).fetchone()
-    conn.close()
-    if not r:
+    inst = models.get_instance_by_id(request.instance_id)
+    if not inst:
         raise HTTPException(status_code=404, detail="Instance not found")
-    inst = dict(r)
     if inst.get("user_id") and inst["user_id"] != agent_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -686,7 +773,7 @@ async def get_terminal_command_logs(
 
 @app.get("/")
 async def root():
-    return {"status": "CallStack Agent is Listening..."}
+    return {"status": "Dispatch Agent is Listening..."}
 
 @app.get("/health")
 async def health():

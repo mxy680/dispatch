@@ -1,11 +1,16 @@
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 import { VoiceRecorder } from "@/components/voice-recorder";
-import { AgentStatusPanel } from "@/components/agent-status-panel";
-import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
-import { DispatchButton } from "@/components/dispatch-button";
-import { TerminalConsole } from "@/components/terminal-console";
-import Link from "next/link";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 type ProjectRow = {
   id: string;
@@ -28,6 +33,24 @@ type TaskRow = {
   raw_transcript?: string | null;
 };
 
+function statusBadge(status: string) {
+  const styles: Record<string, string> = {
+    completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    agent_completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    in_progress: "bg-blue-500/15 text-blue-400 border-blue-500/20",
+    pending: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  };
+  return styles[status] ?? "bg-muted text-muted-foreground";
+}
+
+function timeAgo(iso: string) {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
   const {
@@ -36,159 +59,94 @@ export default async function DashboardPage() {
 
   if (!user) redirect("/login");
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendUrl = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const dashRes = await fetch(`${backendUrl}/api/dashboard/${user.id}`, { cache: "no-store" });
   const dashJson = (await dashRes.json()) as { projects: ProjectRow[]; tasks: TaskRow[] };
-
-  const apiDebug = {
-    status: dashRes.status,
-    ok: dashRes.ok,
-    userId: user.id,
-    projectsCount: dashJson?.projects?.length ?? 0,
-    tasksCount: dashJson?.tasks?.length ?? 0,
-  };
 
   const projects = dashJson.projects ?? [];
   const tasks = dashJson.tasks ?? [];
 
   return (
-    <main className="min-h-screen bg-dark-bg p-4 flex flex-col items-center justify-center gap-12">
-      <div className="text-center space-y-2">
-        <h1 className="text-4xl font-bold tracking-tight">CallStack</h1>
-        <p className="text-gray-400">
-          Connected as{" "}
-          <span className="text-supabase-green font-mono">{user.phone || user.email}</span>
-        </p>
-      </div>
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* ── Command Input ── */}
+      <VoiceRecorder />
 
-      <div className="w-full max-w-2xl">
-        <TerminalAccessToggle userId={user.id} />
-      </div>
-
-      <div className="w-full max-w-2xl">
-        <VoiceRecorder />
-      </div>
-
-      <section className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-            <div className="bg-black/40 px-4 py-2 border-b border-white/5">
-              <span className="text-xs font-mono text-gray-500">PROJECTS</span>
-            </div>
-            <div className="p-4 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="text-gray-400">
-                  <tr>
-                    <th className="text-left py-2">Name</th>
-                    <th className="text-left py-2">Status</th>
-                    <th className="text-right py-2">Total</th>
-                    <th className="text-right py-2">Pending</th>
-                    <th className="text-right py-2">In progress</th>
-                    <th className="text-right py-2">Done</th>
-                  </tr>
-                </thead>
-                <tbody className="text-gray-200">
-                  {projects.map((p) => (
-                    <tr key={p.id} className="border-t border-white/5">
-                      <td className="py-2">{p.name}</td>
-                      <td className="py-2">{p.status ?? "active"}</td>
-                      <td className="py-2 text-right">{p.total_tasks ?? 0}</td>
-                      <td className="py-2 text-right">{p.pending_tasks ?? 0}</td>
-                      <td className="py-2 text-right">{p.in_progress_tasks ?? 0}</td>
-                      <td className="py-2 text-right">{p.completed_tasks ?? 0}</td>
-                    </tr>
-                  ))}
-                  {projects.length === 0 && (
-                    <tr>
-                      <td className="py-3 text-gray-500" colSpan={6}>
-                        No projects yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+      {/* ── Projects ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium">Projects</CardTitle>
+            <span className="text-xs text-muted-foreground tabular-nums">{projects.length} total</span>
           </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {projects.length === 0 ? (
+            <p className="px-6 py-8 text-sm text-muted-foreground text-center">
+              No projects yet. Try: &quot;Create a project called my-api&quot;
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="text-right">Tasks</TableHead>
+                  <TableHead className="text-right">Done</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {projects.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="text-right tabular-nums">{p.total_tasks ?? 0}</TableCell>
+                    <TableCell className="text-right tabular-nums text-emerald-400">{p.completed_tasks ?? 0}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-          <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-            <div className="bg-black/40 px-4 py-2 border-b border-white/5">
-              <span className="text-xs font-mono text-gray-500">TASKS</span>
-            </div>
-            <div className="p-4 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="text-gray-400">
-                  <tr>
-                    <th className="text-left py-2">Project</th>
-                    <th className="text-left py-2">Description</th>
-                    <th className="text-left py-2">Intent</th>
-                    <th className="text-left py-2">Status</th>
-                    <th className="text-left py-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="text-gray-200">
-                  {tasks.map((t) => (
-                    <tr key={t.id} className="border-t border-white/5 align-top">
-                      <td className="py-2">{t.project_name ?? t.project_id}</td>
-                      <td className="py-2 max-w-xs truncate">{t.description}</td>
-                      <td className="py-2">{t.intent_type ?? "-"}</td>
-                      <td className="py-2">
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-mono ${
-                            t.status === "completed" || t.status === "agent_completed"
-                              ? "bg-green-500/20 text-green-400"
-                              : t.status === "agent_dispatched"
-                              ? "bg-purple-500/20 text-purple-400"
-                              : t.status === "in_progress"
-                              ? "bg-blue-500/20 text-blue-400"
-                              : "bg-yellow-500/20 text-yellow-400"
-                          }`}
-                        >
-                          {t.status}
-                        </span>
-                      </td>
-                      <td className="py-2">
-                        <DispatchButton taskId={t.id} />
-                      </td>
-                    </tr>
-                  ))}
-                  {tasks.length === 0 && (
-                    <tr>
-                      <td className="py-3 text-gray-500" colSpan={5}>
-                        No tasks yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+      {/* ── Recent Tasks ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium">Recent Tasks</CardTitle>
+            <span className="text-xs text-muted-foreground tabular-nums">{tasks.length} total</span>
           </div>
-        </div>
-
-        <div className="space-y-6">
-          <AgentStatusPanel userId={user.id} />
-          <TerminalConsole projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
-        </div>
-      </section>
-
-      <section className="w-full max-w-5xl">
-        <details className="bg-dark-card border border-dark-border rounded-xl p-4">
-          <summary className="text-xs font-mono text-gray-400 cursor-pointer">DEBUG: /api/dashboard response</summary>
-          <pre className="mt-3 text-xs text-gray-300 overflow-auto">
-            {JSON.stringify({ apiDebug, dashJson }, null, 2)}
-          </pre>
-        </details>
-      </section>
-
-      <Link href="/dashboard/history" className="text-sm text-gray-400 hover:text-white transition-colors">
-        View Call History →
-      </Link>
-      <Link href="/dashboard/settings" className="text-sm text-gray-400 hover:text-white transition-colors">
-        Settings →
-      </Link>
-
-      <form action="/auth/signout" method="post" className="mt-8">
-        <button className="text-sm text-gray-600 hover:text-red-400 transition-colors">Sign Out</button>
-      </form>
-    </main>
+        </CardHeader>
+        <CardContent className="p-0">
+          {tasks.length === 0 ? (
+            <p className="px-6 py-8 text-sm text-muted-foreground text-center">
+              No tasks yet. Use the command input above to create one.
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              {tasks.slice(0, 20).map((t) => (
+                <div key={t.id} className="px-6 py-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{t.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {t.project_name ?? "Unknown project"}
+                      {t.raw_transcript && (
+                        <span className="ml-2 italic">&quot;{t.raw_transcript}&quot;</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="outline" className={`text-[10px] border ${statusBadge(t.status)}`}>
+                      {t.status}
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {timeAgo(t.created_at)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

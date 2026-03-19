@@ -1,15 +1,18 @@
 # server/services/llm.py
-import boto3
 import json
 import os
+from openai import AsyncOpenAI
 
-# AWS Configuration
-# Ensure your ~/.aws/credentials are set, or set AWS_PROFILE/AWS_REGION in .env
-BEDROCK_REGION = os.environ.get("AWS_REGION", "us-east-1")
-# Using Haiku for speed/cost. Make sure you have access enabled in Bedrock Console!
-MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0" 
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3-haiku")
 
-bedrock = boto3.client(service_name="bedrock-runtime", region_name=BEDROCK_REGION)
+if not OPENROUTER_API_KEY:
+    print("[LLM] WARNING: OPENROUTER_API_KEY not set. Intent parsing will fail.")
+
+client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 
 SYSTEM_PROMPT = """
 You are the "Brain" of a voice coding assistant. Map natural language to tools.
@@ -24,41 +27,36 @@ Structure:
 }
 """
 
+
 async def parse_intent(text: str, projects: list):
-    # Format project context
     project_names = [p['name'] for p in projects]
     context_str = f"Available Projects: {', '.join(project_names)}"
-    
+
     user_message = f"""
     Context: {context_str}
     User Command: "{text}"
     """
 
     try:
-        response = bedrock.invoke_model(
-            modelId=MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1024,
-                "system": SYSTEM_PROMPT,
-                "messages": [
-                    {"role": "user", "content": user_message}
-                ]
-            })
+        response = await client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=1024,
         )
 
-        # Parse Bedrock response
-        response_body = json.loads(response.get("body").read())
-        content_text = response_body["content"][0]["text"]
-        
+        content_text = response.choices[0].message.content
+
         # Clean up if the model adds markdown code blocks
         if "```json" in content_text:
             content_text = content_text.split("```json")[1].split("```")[0].strip()
-            
+        elif "```" in content_text:
+            content_text = content_text.split("```")[1].split("```")[0].strip()
+
         return json.loads(content_text)
 
     except Exception as e:
-        print(f"Bedrock Error: {e}")
+        print(f"[LLM] OpenRouter error: {e}")
         return {"intent": "error", "message": str(e)}

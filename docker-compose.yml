@@ -4,7 +4,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DEVELOPMENT_MODE=true
+      - DEVELOPMENT_MODE=${DEVELOPMENT_MODE:-true}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     volumes:
       - ./server:/app
       - server-data:/app/data
@@ -17,6 +20,8 @@ services:
     environment:
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      - BACKEND_URL=http://server:8000
     volumes:
       - ./web:/app
       - /app/node_modules

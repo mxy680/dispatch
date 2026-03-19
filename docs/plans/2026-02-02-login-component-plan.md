@@ -361,7 +361,7 @@ export function LoginForm() {
   return (
     <div className="w-full max-w-sm">
       <div className="bg-dark-card border border-dark-border rounded-lg p-8">
-        <h1 className="text-2xl font-semibold text-center mb-2">CallStack</h1>
+        <h1 className="text-2xl font-semibold text-center mb-2">Dispatch</h1>
         <p className="text-gray-400 text-center text-sm mb-8">
           {step === "phone"
             ? "Enter your phone number to sign in"
@@ -618,7 +618,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CallStack",
+  title: "Dispatch",
   description: "Voice-controlled Claude Code orchestration",
 };
 
@@ -665,7 +665,7 @@ python-dotenv>=1.0.0
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="CallStack API")
+app = FastAPI(title="Dispatch API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -678,7 +678,7 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "callstack-api"}
+    return {"status": "ok", "service": "dispatch-api"}
 
 
 @app.get("/health")

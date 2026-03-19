@@ -2,8 +2,8 @@ import { createClient } from "@/lib/supabase/client";
 
 let cachedToken: string | null = null;
 let cacheTs = 0;
-const LS_KEY = "callstack_access_token";
-const LS_TS_KEY = "callstack_access_token_ts";
+const LS_KEY = "dispatch_access_token";
+const LS_TS_KEY = "dispatch_access_token_ts";
 
 // Cache token for up to 24 hours; Supabase will still 401 if it's actually invalid.
 const CACHE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -62,5 +62,14 @@ export async function getAuthHeader(): Promise<{ Authorization: string } | null>
   const token = await getAccessToken();
   if (!token) return null;
   return { Authorization: `Bearer ${token}` };
+}
+
+export function clearAccessToken() {
+  cachedToken = null;
+  cacheTs = 0;
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(LS_KEY);
+    window.localStorage.removeItem(LS_TS_KEY);
+  }
 }
 
