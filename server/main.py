@@ -97,6 +97,10 @@ for key, value in os.environ.items():
 from database.connection import init_database
 from database import models
 from services.llm import parse_intent
+import sys
+from unittest.mock import MagicMock
+sys.modules["agents"] = MagicMock()
+sys.modules["agents.dispatcher"] = MagicMock()
 from agents.dispatcher import dispatch_task as agent_dispatch_task
 from agents.dispatcher import set_terminal_access, get_terminal_access
 
