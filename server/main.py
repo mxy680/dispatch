@@ -9,6 +9,7 @@ import time
 import uuid
 from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
+from fastapi import Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from supabase import create_client, Client
@@ -1218,6 +1219,71 @@ async def get_terminal_command_logs(
 @app.get("/")
 async def root():
     return {"status": "CallStack Agent is Listening..."}
+
+@app.post("/twilio/incoming")
+async def twilio_incoming(request: Request):
+    """
+    Twilio calls this webhook when someone calls the Twilio number.
+    It records the caller's voice and sends it to our transcription pipeline.
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Record
+    
+    response = VoiceResponse()
+    response.say("Welcome to Dispatch. Please say your command after the beep.")
+    response.record(
+        action="/twilio/recording",
+        method="POST",
+        max_length=30,
+        transcribe=False,
+        play_beep=True,
+    )
+    return Response(content=str(response), media_type="application/xml")
+
+
+@app.post("/twilio/recording")
+async def twilio_recording(request: Request):
+    """
+    Twilio calls this after the recording is done.
+    Downloads the audio and runs it through our transcription pipeline.
+    """
+    import httpx
+    from twilio.twiml.voice_response import VoiceResponse
+
+    form = await request.form()
+    recording_url = form.get("RecordingUrl")
+    
+    response = VoiceResponse()
+    
+    if not recording_url:
+        response.say("Sorry, I could not process your command.")
+        return Response(content=str(response), media_type="application/xml")
+
+    try:
+        # Download the audio from Twilio
+        async with httpx.AsyncClient() as client:
+            audio_response = await client.get(
+                f"{recording_url}.mp3",
+                auth=(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN")),
+            )
+        
+        # Transcribe it
+        audio_bytes = audio_response.content
+        with open("temp_twilio.mp3", "wb") as f:
+            f.write(audio_bytes)
+        
+        segments, _ = model.transcribe("temp_twilio.mp3", beam_size=5)
+        transcript = " ".join([s.text for s in segments]).strip()
+        os.remove("temp_twilio.mp3")
+        
+        # Parse intent
+        intent_data = await parse_intent(transcript, []) or {"intent": "unknown"}
+        
+        response.say(f"I heard: {transcript}. Processing your command now.")
+    except Exception as e:
+        print(f"[TWILIO] Error: {e}")
+        response.say("Sorry, something went wrong processing your command.")
+    
+    return Response(content=str(response), media_type="application/xml")
 
 @app.get("/health")
 async def health():
