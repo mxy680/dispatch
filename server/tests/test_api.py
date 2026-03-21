@@ -1,11 +1,5 @@
 from __future__ import annotations
 import pytest
-import sys
-from unittest.mock import MagicMock
-
-# Mock missing modules before importing app
-sys.modules["agents"] = MagicMock()
-sys.modules["agents.copilot_agent"] = MagicMock()
 
 from fastapi.testclient import TestClient
 from main import app
