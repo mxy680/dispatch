@@ -855,6 +855,12 @@ async def create_project(request: CreateProjectRequest, user: dict = Depends(get
     pid = models.create_project(user.id, request.name, request.file_path)
     return {"success": True, "project_id": pid}
 
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, project_id)
+    models.delete_project(project_id)
+    return {"success": True}
+
 @app.get("/api/projects/{project_id}/tasks")
 async def get_project_tasks(project_id: str, user: dict = Depends(get_current_user)):
     _require_project_owner(user.id, project_id)

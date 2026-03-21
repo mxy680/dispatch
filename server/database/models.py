@@ -67,6 +67,31 @@ def touch_project(project_id: str):
     logger.debug("touch_project project_id=%s", project_id)
 
 
+def delete_project(project_id: str):
+    """Delete a project and its related data (tasks, sessions, commands, logs)."""
+    sb = get_sb()
+    # Delete in dependency order.
+    # Terminal logs → commands → sessions
+    sessions_res = sb.table("terminal_sessions").select("id").eq("project_id", project_id).execute()
+    session_ids = [s["id"] for s in (sessions_res.data or [])]
+    if session_ids:
+        cmds_res = sb.table("terminal_commands").select("id").in_("session_id", session_ids).execute()
+        cmd_ids = [c["id"] for c in (cmds_res.data or [])]
+        if cmd_ids:
+            sb.table("terminal_logs").delete().in_("command_id", cmd_ids).execute()
+            sb.table("terminal_commands").delete().in_("id", cmd_ids).execute()
+        sb.table("terminal_sessions").delete().in_("id", session_ids).execute()
+    # Tasks
+    sb.table("tasks").delete().eq("project_id", project_id).execute()
+    # Device project links
+    sb.table("device_project_links").delete().eq("project_id", project_id).execute()
+    # Cursor context
+    sb.table("cursor_context_snapshots").delete().eq("project_id", project_id).execute()
+    # Project itself
+    sb.table("projects").delete().eq("id", project_id).execute()
+    logger.debug("delete_project project_id=%s", project_id)
+
+
 def get_user_projects(user_id):
     sb = get_sb()
     res = sb.table("projects").select("*").eq("user_id", user_id).order("last_accessed", desc=True).execute()

@@ -14,6 +14,7 @@ import {
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { UnifiedCommandCenter } from "@/components/unified-command-center";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
+import { DeleteProjectButton } from "@/components/delete-project-button";
 
 type ProjectRow = {
   id: string;
@@ -114,7 +115,12 @@ export default async function DashboardPage() {
                 <TableBody>
                   {projects.map((p) => (
                     <TableRow key={p.id}>
-                      <TableCell className="font-medium text-sm">{p.name}</TableCell>
+                      <TableCell className="font-medium text-sm">
+                        <div className="flex items-center gap-2">
+                          {p.name}
+                          <DeleteProjectButton projectId={p.id} />
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right tabular-nums text-sm">{p.total_tasks ?? 0}</TableCell>
                       <TableCell className="text-right tabular-nums text-sm text-emerald-400">{p.completed_tasks ?? 0}</TableCell>
                     </TableRow>
