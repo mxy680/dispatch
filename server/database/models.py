@@ -23,14 +23,18 @@ def _now_iso() -> str:
 
 def upsert_user(user_id: str, email: str, phone_number: str | None = None):
     sb = get_sb()
-    data = {"id": user_id, "email": email}
-    if phone_number:
-        data["phone_number"] = phone_number
-    try:
-        sb.table("users").upsert(data, on_conflict="id").execute()
-    except Exception as e:
-        logger.warning("upsert_user primary upsert failed, trying email conflict: %s", e)
-        sb.table("users").upsert(data, on_conflict="email").execute()
+    # Check if user already exists — if so, just update.
+    existing = sb.table("users").select("id").eq("id", user_id).maybe_single().execute()
+    if existing and existing.data:
+        update = {"email": email}
+        if phone_number:
+            update["phone_number"] = phone_number
+        sb.table("users").update(update).eq("id", user_id).execute()
+    else:
+        data = {"id": user_id, "email": email}
+        if phone_number:
+            data["phone_number"] = phone_number
+        sb.table("users").insert(data).execute()
     logger.debug("upsert_user user_id=%s email=%r phone=%r", user_id, email, phone_number)
 
 

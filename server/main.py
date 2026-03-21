@@ -115,7 +115,7 @@ logger.info(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3100"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -204,7 +204,7 @@ def get_current_user(authorization: Annotated[Union[str, None], Header()] = None
         class MockUser:
             id = os.environ.get("DEV_USER_ID", "test-user-123")
             email = os.environ.get("DEV_USER_EMAIL", "test@example.com")
-            phone = os.environ.get("DEV_USER_PHONE", "+15551234567")
+            phone = os.environ.get("DEV_USER_PHONE", None)
         return MockUser()
 
     raise HTTPException(status_code=401, detail="Missing Authorization Header")
