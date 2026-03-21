@@ -238,7 +238,7 @@ def get_current_device(
 class CreateProjectRequest(BaseModel):
     user_id: str
     name: str
-    file_path: str = None
+    file_path: str | None = None
 
 class CreateTaskRequest(BaseModel):
     project_id: str

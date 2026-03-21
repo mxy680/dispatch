@@ -18,8 +18,9 @@ export function CreateProjectDialog({ userId }: { userId: string }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const defaultBasePath = "/Users/markshteyn/projects/";
   const [name, setName] = useState("");
-  const [filePath, setFilePath] = useState("");
+  const [filePath, setFilePath] = useState(defaultBasePath);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,9 +39,15 @@ export function CreateProjectDialog({ userId }: { userId: string }) {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.detail ?? "Failed to create project");
+      if (!res.ok) {
+        const detail = json?.detail;
+        const msg = typeof detail === "string" ? detail
+          : Array.isArray(detail) ? detail.map((d: { msg?: string }) => d.msg).join(", ")
+          : "Failed to create project";
+        throw new Error(msg);
+      }
       setName("");
-      setFilePath("");
+      setFilePath(defaultBasePath);
       setOpen(false);
       router.refresh();
     } catch (e: unknown) {
@@ -67,20 +74,26 @@ export function CreateProjectDialog({ userId }: { userId: string }) {
             <Input
               id="project-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                const newName = e.target.value;
+                setName(newName);
+                if (filePath === defaultBasePath || filePath.startsWith(defaultBasePath)) {
+                  setFilePath(defaultBasePath + newName.trim().replace(/\s+/g, "-"));
+                }
+              }}
               onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
               placeholder="my-project"
               autoFocus
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="project-path">Local path (optional)</Label>
+            <Label htmlFor="project-path">Local path</Label>
             <Input
               id="project-path"
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-              placeholder="/Users/you/projects/my-project"
+              placeholder="/Users/markshteyn/projects/my-project"
             />
             <p className="text-xs text-muted-foreground">
               The folder on your machine where the agent will run commands.
