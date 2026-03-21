@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CommandLogViewer } from "@/components/command-log-viewer";
 
 type ProjectOption = { id: string; name: string };
 
@@ -21,22 +22,7 @@ type TimelineCommand = {
   created_at: string;
 };
 
-type TerminalLog = {
-  id: string;
-  sequence: number;
-  stream: "stdout" | "stderr";
-  chunk: string;
-};
-
 type CommandMode = "shell" | "agent";
-
-function statusColor(status: string) {
-  if (status === "completed") return "text-emerald-400";
-  if (status === "running") return "text-blue-400";
-  if (status === "queued") return "text-amber-400";
-  if (status === "failed" || status === "cancelled") return "text-red-400";
-  return "text-gray-400";
-}
 
 function statusDot(status: string) {
   if (status === "completed") return "bg-emerald-400";
@@ -71,20 +57,13 @@ export function UnifiedCommandCenter({
 
   const [commands, setCommands] = useState<TimelineCommand[]>([]);
   const [activeCommandId, setActiveCommandId] = useState<string>("");
-  const [logs, setLogs] = useState<TerminalLog[]>([]);
 
-  const logsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeCommand = useMemo(
     () => commands.find((c) => c.id === activeCommandId) ?? null,
     [commands, activeCommandId]
   );
-
-  const activeIsDone = useMemo(() => {
-    if (!activeCommand) return false;
-    return ["completed", "failed", "cancelled"].includes(activeCommand.status);
-  }, [activeCommand]);
 
   // Load saved provider preference
   useEffect(() => {
@@ -111,16 +90,6 @@ export function UnifiedCommandCenter({
     } catch { /* silent */ }
   }, [activeCommandId, backendUrl, selectedProjectId]);
 
-  const refreshLogs = useCallback(async () => {
-    if (!activeCommandId) return;
-    try {
-      const res = await authFetch(`${backendUrl}/api/terminal/commands/${activeCommandId}/logs?limit=300`, { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
-      setLogs((data.logs ?? []) as TerminalLog[]);
-    } catch { /* silent */ }
-  }, [activeCommandId, backendUrl]);
-
   // Poll timeline
   useEffect(() => {
     refreshTimeline();
@@ -130,26 +99,6 @@ export function UnifiedCommandCenter({
     }, 4000);
     return () => clearInterval(interval);
   }, [refreshTimeline]);
-
-  // Load logs when active command changes
-  useEffect(() => {
-    setLogs([]);
-    if (!activeCommandId) return;
-    refreshLogs();
-  }, [activeCommandId, refreshLogs]);
-
-  // Poll logs while command is running
-  useEffect(() => {
-    if (!activeCommand) return;
-    if (["completed", "failed", "cancelled"].includes(activeCommand.status)) return;
-    const interval = setInterval(refreshLogs, 1500);
-    return () => clearInterval(interval);
-  }, [activeCommand, refreshLogs]);
-
-  // Auto-scroll logs
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
 
   // Auto-select first command when active is removed
   useEffect(() => {
@@ -337,42 +286,11 @@ export function UnifiedCommandCenter({
             </div>
           </Card>
 
-          {/* Output */}
-          <Card className="overflow-hidden">
-            <div className="px-3 py-2 border-b border-border flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground">Output</span>
-              {activeCommand && (
-                <span className={`text-xs font-mono ${statusColor(activeCommand.status)}`}>
-                  {activeCommand.status}
-                </span>
-              )}
-            </div>
-            <div className="h-[400px] overflow-auto p-3 font-mono text-xs whitespace-pre-wrap text-foreground bg-black/20">
-              {activeCommand ? (
-                <>
-                  {logs.length > 0 ? (
-                    logs
-                      .slice()
-                      .sort((a, b) => a.sequence - b.sequence)
-                      .map((l, i) => (
-                        <span key={l.id ?? i} className={l.stream === "stderr" ? "text-red-400" : ""}>
-                          {l.chunk}
-                        </span>
-                      ))
-                  ) : activeIsDone ? (
-                    <span className="text-muted-foreground">
-                      {activeCommand.status === "failed" ? "Command failed with no output." : "Completed with no output."}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground animate-pulse">Waiting for output...</span>
-                  )}
-                  <div ref={logsEndRef} />
-                </>
-              ) : (
-                <span className="text-muted-foreground">Select a command from the history.</span>
-              )}
-            </div>
-          </Card>
+          <CommandLogViewer
+            commandId={activeCommandId}
+            commandStatus={activeCommand?.status ?? ""}
+            height="400px"
+          />
         </div>
       )}
     </div>

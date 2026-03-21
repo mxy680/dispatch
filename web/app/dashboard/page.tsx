@@ -2,7 +2,6 @@ import { DashboardPoller } from "@/components/dashboard-poller";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -15,6 +14,7 @@ import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { UnifiedCommandCenter } from "@/components/unified-command-center";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { DeleteProjectButton } from "@/components/delete-project-button";
+import { RecentActivityCard } from "@/components/recent-activity-card";
 
 type ProjectRow = {
   id: string;
@@ -35,24 +35,6 @@ type TaskRow = {
   created_at: string;
   intent_type?: string | null;
 };
-
-function statusBadge(status: string) {
-  const styles: Record<string, string> = {
-    completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
-    agent_completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
-    in_progress: "bg-blue-500/15 text-blue-400 border-blue-500/20",
-    pending: "bg-amber-500/15 text-amber-400 border-amber-500/20",
-  };
-  return styles[status] ?? "bg-muted text-muted-foreground";
-}
-
-function timeAgo(iso: string) {
-  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -145,43 +127,7 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Recent Activity */}
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium">Recent Activity</CardTitle>
-              <span className="text-xs text-muted-foreground tabular-nums">{activity.length}</span>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            {activity.length === 0 ? (
-              <p className="px-6 py-8 text-sm text-muted-foreground text-center">
-                No activity yet. Send a command above.
-              </p>
-            ) : (
-              <div className="divide-y divide-border max-h-[300px] overflow-auto">
-                {activity.map((a) => (
-                  <div key={a.id} className="px-4 py-2.5 flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm truncate">{a.label}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {a.project ?? "Unknown project"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="outline" className={`text-[10px] border ${statusBadge(a.status)}`}>
-                        {a.status}
-                      </Badge>
-                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                        {timeAgo(a.time)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <RecentActivityCard activity={activity} />
       </div>
     </div>
   );
