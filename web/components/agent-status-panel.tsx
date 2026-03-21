@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { authFetch } from "@/lib/supabase/access-token";
 
 type AgentExecution = {
   id: string;
@@ -17,6 +18,7 @@ type AgentExecution = {
 };
 
 export function AgentStatusPanel({ userId }: { userId: string }) {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [executions, setExecutions] = useState<AgentExecution[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
         return;
       }
       try {
-        const res = await fetch(`http://localhost:8000/api/agent/executions/${userId}`);
+        const res = await authFetch(`${backendUrl}/api/agent/executions/${userId}`);
         if (res.ok) {
           const data = await res.json();
           setExecutions(data.executions || []);
@@ -42,7 +44,7 @@ export function AgentStatusPanel({ userId }: { userId: string }) {
     fetchExecutions();
     const interval = setInterval(fetchExecutions, 15000);
     return () => clearInterval(interval);
-  }, [userId]);
+  }, [backendUrl, userId]);
 
   const statusColor = (status: string) => {
     switch (status) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getAuthHeader } from "@/lib/supabase/access-token";
+import { authFetch } from "@/lib/supabase/access-token";
 
 type AgentTokenRow = {
   id: string;
@@ -11,6 +11,20 @@ type AgentTokenRow = {
   revoked_at?: string | null;
 };
 
+type CompanionDeviceRow = {
+  id: string;
+  name?: string | null;
+  platform?: string | null;
+  status: string;
+  last_heartbeat?: string | null;
+  created_at: string;
+};
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export function SettingsAgentsPanel() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [tokens, setTokens] = useState<AgentTokenRow[]>([]);
@@ -18,6 +32,8 @@ export function SettingsAgentsPanel() {
   const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [devices, setDevices] = useState<CompanionDeviceRow[]>([]);
 
   const installCommand = useMemo(() => {
     if (!createdToken) return null;
@@ -27,36 +43,59 @@ export function SettingsAgentsPanel() {
   const loadTokens = async () => {
     setErr(null);
     try {
-      let auth = await getAuthHeader();
-      if (!auth) auth = await getAuthHeader(true);
-      if (!auth) return;
-      const res = await fetch(`${backendUrl}/api/settings/agent-tokens`, { headers: { ...auth }, cache: "no-store" });
+      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to load agent tokens");
       setTokens((data.tokens ?? []) as AgentTokenRow[]);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to load agent tokens");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to load agent tokens"));
+    }
+  };
+
+  const loadDevices = async () => {
+    try {
+      const res = await authFetch(`${backendUrl}/api/device`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? "Failed to load devices");
+      setDevices((data.devices ?? []) as CompanionDeviceRow[]);
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to load devices"));
     }
   };
 
   useEffect(() => {
     loadTokens();
+    loadDevices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const createPairingCode = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await authFetch(`${backendUrl}/api/device/pair/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Dispatch Companion", platform: navigator.platform }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? "Failed to create pairing code");
+      setPairingCode(String(data.pairing_code));
+      await loadDevices();
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to create pairing code"));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const createToken = async () => {
     setLoading(true);
     setErr(null);
     try {
-      let auth = await getAuthHeader();
-      if (!auth) auth = await getAuthHeader(true);
-      if (!auth) {
-        setErr("Please sign in again.");
-        return;
-      }
-      const res = await fetch(`${backendUrl}/api/settings/agent-tokens`, {
+      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...auth },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: label.trim() || null }),
       });
       const data = await res.json();
@@ -64,8 +103,8 @@ export function SettingsAgentsPanel() {
       setCreatedToken(String(data.token));
       setLabel("");
       await loadTokens();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to create token");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to create token"));
     } finally {
       setLoading(false);
     }
@@ -75,18 +114,12 @@ export function SettingsAgentsPanel() {
     setLoading(true);
     setErr(null);
     try {
-      let auth = await getAuthHeader();
-      if (!auth) auth = await getAuthHeader(true);
-      if (!auth) {
-        setErr("Please sign in again.");
-        return;
-      }
-      const res = await fetch(`${backendUrl}/api/settings/agent-tokens/${id}`, { method: "DELETE", headers: { ...auth } });
+      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens/${id}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail ?? "Failed to revoke token");
       await loadTokens();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to revoke token");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to revoke token"));
     } finally {
       setLoading(false);
     }
@@ -124,6 +157,30 @@ export function SettingsAgentsPanel() {
           </button>
         </div>
 
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-mono text-gray-500">Desktop Companion Pairing</p>
+            <button
+              onClick={createPairingCode}
+              disabled={loading}
+              className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 disabled:opacity-50"
+            >
+              Create pairing code
+            </button>
+          </div>
+          {pairingCode ? (
+            <div className="text-sm font-mono text-supabase-green">{pairingCode}</div>
+          ) : (
+            <p className="text-xs text-gray-400">
+              Generate a short-lived pairing code and enter it in the companion app.
+            </p>
+          )}
+          <p className="text-[11px] text-gray-500">
+            Companion scaffold folder: <span className="font-mono">companion/</span>. Cursor extension scaffold:
+            <span className="font-mono"> cursor-extension/</span>.
+          </p>
+        </div>
+
         {createdToken && (
           <div className="bg-black/30 border border-white/10 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between gap-3">
@@ -152,6 +209,17 @@ export function SettingsAgentsPanel() {
                   >
                     Copy
                   </button>
+                </div>
+                <div className="mt-3 bg-black/40 border border-white/10 rounded p-3">
+                  <p className="text-xs font-mono text-gray-500 mb-2">Cursor integration (step-by-step)</p>
+                  <ol className="text-xs text-gray-300 space-y-1 list-decimal list-inside">
+                    <li>Install the agent on the same machine where Cursor is running.</li>
+                    <li>Start the local helper using the command above.</li>
+                    <li>In Cursor, open your project folder matching <span className="font-mono">--project-path</span>.</li>
+                    <li>Install Cursor CLI or Claude CLI in that shell.</li>
+                    <li>In Dashboard, choose the provider and send a typed or voice command.</li>
+                    <li>Watch live command output in the Unified Command Center timeline.</li>
+                  </ol>
                 </div>
               </>
             )}
@@ -196,6 +264,27 @@ export function SettingsAgentsPanel() {
             {tokens.length === 0 && (
               <div className="text-xs font-mono text-gray-600 bg-black/20 border border-white/10 rounded p-3">
                 No tokens yet.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-2">
+          <p className="text-xs font-mono text-gray-500 mb-2">Connected companion devices</p>
+          <div className="space-y-2">
+            {devices.map((d) => (
+              <div key={d.id} className="border border-white/10 bg-black/20 rounded-lg p-3">
+                <div className="text-sm text-gray-200">{d.name || "Unnamed device"}</div>
+                <div className="text-[11px] font-mono text-gray-500">
+                  {d.platform || "unknown"} • {d.status} • created {new Date(d.created_at).toLocaleString()}
+                  {d.last_heartbeat ? ` • heartbeat ${new Date(d.last_heartbeat).toLocaleString()}` : ""}
+                </div>
+                <div className="text-[11px] font-mono text-gray-700 mt-1">Device ID: {d.id}</div>
+              </div>
+            ))}
+            {devices.length === 0 && (
+              <div className="text-xs font-mono text-gray-600 bg-black/20 border border-white/10 rounded p-3">
+                No companion devices paired yet.
               </div>
             )}
           </div>

@@ -115,6 +115,10 @@ def _run_migrations(conn: sqlite3.Connection):
                 session_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
                 command TEXT NOT NULL,
+                source TEXT DEFAULT 'typed',
+                provider TEXT DEFAULT 'shell',
+                user_prompt TEXT,
+                normalized_command TEXT,
                 status TEXT DEFAULT 'queued',
                 exit_code INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -124,6 +128,11 @@ def _run_migrations(conn: sqlite3.Connection):
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
+    else:
+        _ensure_column(conn, "terminal_commands", "source", "TEXT DEFAULT 'typed'")
+        _ensure_column(conn, "terminal_commands", "provider", "TEXT DEFAULT 'shell'")
+        _ensure_column(conn, "terminal_commands", "user_prompt", "TEXT")
+        _ensure_column(conn, "terminal_commands", "normalized_command", "TEXT")
 
     if "terminal_logs" not in existing_tables:
         conn.execute("""
@@ -138,6 +147,55 @@ def _run_migrations(conn: sqlite3.Connection):
             )
         """)
 
+    if "user_preferences" in existing_tables:
+        _ensure_column(conn, "user_preferences", "default_provider", "TEXT DEFAULT 'cursor'")
+        _ensure_column(conn, "user_preferences", "terminal_access_granted", "INTEGER DEFAULT 0")
+
+    if "companion_devices" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS companion_devices (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                platform TEXT,
+                status TEXT DEFAULT 'pending',
+                pairing_code TEXT,
+                pairing_expires_at TIMESTAMP,
+                device_token_hash TEXT,
+                last_heartbeat TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+    if "device_project_links" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS device_project_links (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                local_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (device_id) REFERENCES companion_devices(id),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        """)
+
+    if "cursor_context_snapshots" not in existing_tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cursor_context_snapshots (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                file_path TEXT,
+                selection TEXT,
+                diagnostics TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (device_id) REFERENCES companion_devices(id),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        """)
+
     # Indexes (idempotent) - keep here so they run AFTER columns exist
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_last_accessed ON projects(user_id, last_accessed)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at ON tasks(user_id, created_at)")
@@ -147,6 +205,9 @@ def _run_migrations(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_companion_devices_user_created ON companion_devices(user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_device_project_links_device_project ON device_project_links(device_id, project_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cursor_context_device_project_created ON cursor_context_snapshots(device_id, project_id, created_at)")
 
 def init_database():
     conn = get_db_connection()

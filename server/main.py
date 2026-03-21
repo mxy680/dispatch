@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import uuid
-from typing import Annotated, Union, Optional
+from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
@@ -21,10 +21,10 @@ try:
     load_dotenv()
 except Exception as e:
     pass
-
+os.environ['DEVELOPMENT_MODE']='true'
 DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-
+os.environ['AWS_PROFILE'] = "personal"
 
 class AccessLogThrottleFilter(logging.Filter):
     """
@@ -39,31 +39,42 @@ class AccessLogThrottleFilter(logging.Filter):
         self._last_seen: dict[str, float] = {}
         self._lock = threading.Lock()
         self.noisy_paths = (
+            "/api/device/claim-next",
+            "/api/device/heartbeat",
             "/api/agent/local/claim-next",
             "/api/agent/local/heartbeat",
             "/api/agent/executions/",
             "/api/terminal/commands/",
             "/api/terminal/sessions/",
+            "/api/unified/timeline",
+            "/api/terminal/commands/",      # list + logs
+            "/api/terminal/sessions/",      # polling
+            "/api/call-sessions/",          # if it’s chatty
         )
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
         if "OPTIONS " in msg:
             return False
+        # If it's one of the noisy endpoints and succeeded, drop it completely
+        if any(p in msg for p in self.noisy_paths) and '" 200 OK' in msg:
+            return False
 
-        is_noisy = any(p in msg for p in self.noisy_paths)
-        is_ok = '" 200 OK' in msg
-        if not (is_noisy and is_ok):
-            return True
-
-        key = msg.split("HTTP/1.1")[0] if "HTTP/1.1" in msg else msg
-        now = time.time()
-        with self._lock:
-            last = self._last_seen.get(key, 0.0)
-            if now - last < self.window_s:
-                return False
-            self._last_seen[key] = now
+        # Otherwise, keep the log
         return True
+        # is_noisy = any(p in msg for p in self.noisy_paths)
+        # is_ok = '" 200 OK' in msg
+        # if not (is_noisy and is_ok):
+        #     return True
+
+        # key = msg.split("HTTP/1.1")[0] if "HTTP/1.1" in msg else msg
+        # now = time.time()
+        # with self._lock: 
+        #     last = self._last_seen.get(key, 0.0)
+        #     if now - last < self.window_s:
+        #         return False
+        #     self._last_seen[key] = now
+        # return True
 
 
 logging.basicConfig(
@@ -85,8 +96,8 @@ for key, value in os.environ.items():
 from database.connection import init_database
 from database import models
 from services.llm import parse_intent
-from agents.copilot_agent import dispatch_task as agent_dispatch_task
-from agents.copilot_agent import set_terminal_access, get_terminal_access
+from agents.dispatcher import dispatch_task as agent_dispatch_task
+from agents.dispatcher import set_terminal_access, get_terminal_access
 
 app = FastAPI(title="CallStack API")
 
@@ -207,6 +218,17 @@ def get_current_agent_user_id(
         raise HTTPException(status_code=401, detail="Invalid agent token")
     return user_id
 
+
+def get_current_device(
+    x_device_token: Annotated[Union[str, None], Header(alias="X-Device-Token")] = None,
+) -> dict:
+    if not x_device_token:
+        raise HTTPException(status_code=401, detail="Missing X-Device-Token")
+    device = models.get_device_by_token(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid device token")
+    return device
+
 # --- 4. REQUEST MODELS ---
 class CreateProjectRequest(BaseModel):
     user_id: str
@@ -241,6 +263,7 @@ class CreateTerminalSessionRequest(BaseModel):
 
 class CreateTerminalCommandRequest(BaseModel):
     command: str
+    provider: Literal["cursor", "claude", "shell"] | None = None
 
 class AppendTerminalLogsRequest(BaseModel):
     sequence_start: int
@@ -257,6 +280,55 @@ class ClaimNextCommandRequest(BaseModel):
 
 class CreateAgentTokenRequest(BaseModel):
     label: str | None = None
+
+
+class UpdateProviderPreferenceRequest(BaseModel):
+    provider: Literal["cursor", "claude", "shell"]
+
+
+class UnifiedCommandRequest(BaseModel):
+    project_id: str
+    prompt: str
+    source: Literal["typed", "system"] = "typed"
+    provider: Literal["cursor", "claude", "shell"] | None = None
+    session_name: str | None = "Unified Session"
+    device_id: str | None = None
+
+
+class DevicePairStartRequest(BaseModel):
+    name: str | None = None
+    platform: str | None = None
+
+
+class DevicePairCompleteRequest(BaseModel):
+    pairing_code: str
+    name: str | None = None
+    platform: str | None = None
+
+
+class DeviceProjectLinkRequest(BaseModel):
+    project_id: str
+    local_path: str | None = None
+
+
+class DeviceProjectLinkByNameRequest(BaseModel):
+    project_name: str
+    local_path: str
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    device_id: str
+
+
+class DeviceClaimRequest(BaseModel):
+    wait_seconds: int = 20
+
+
+class CursorContextRequest(BaseModel):
+    project_id: str
+    file_path: str | None = None
+    selection: str | None = None
+    diagnostics: str | None = None
 
 def _require_project_owner(user_id: str, project_id: str) -> dict:
     project = models.get_project_by_id(project_id)
@@ -283,6 +355,28 @@ def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
     return cmd
 
 
+def _require_task_owner(user_id: str, task_id: str) -> dict:
+    task = models.get_task_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return task
+
+
+def _require_user_match(path_user_id: str, user_id: str) -> None:
+    if path_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _require_device_owner(user_id: str, device_id: str) -> dict:
+    devices = models.list_devices_for_user(user_id)
+    dev = next((d for d in devices if d.get("id") == device_id), None)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return dev
+
+
 @app.post("/api/settings/agent-tokens")
 async def create_agent_token(request: CreateAgentTokenRequest, user: dict = Depends(get_current_user)):
     models.upsert_user(user_id=user.id, email=getattr(user, "email", None) or f"{user.id}@local", phone_number=getattr(user, "phone", None))
@@ -306,6 +400,118 @@ async def revoke_agent_token(token_id: str, user: dict = Depends(get_current_use
 async def delete_history(user: dict = Depends(get_current_user)):
     counts = models.delete_user_history(user_id=user.id)
     return {"success": True, "deleted": counts}
+
+
+@app.get("/api/settings/provider")
+async def get_provider_preference(user: dict = Depends(get_current_user)):
+    provider = models.get_default_provider_for_user(user.id)
+    return {"success": True, "provider": provider}
+
+
+@app.put("/api/settings/provider")
+async def set_provider_preference(
+    request: UpdateProviderPreferenceRequest,
+    user: dict = Depends(get_current_user),
+):
+    models.set_default_provider_for_user(user.id, request.provider)
+    return {"success": True, "provider": request.provider}
+
+
+@app.post("/api/device/pair/start")
+async def start_device_pairing(request: DevicePairStartRequest, user: dict = Depends(get_current_user)):
+    models.upsert_user(
+        user_id=user.id,
+        email=getattr(user, "email", None) or f"{user.id}@local",
+        phone_number=getattr(user, "phone", None),
+    )
+    pairing = models.create_device_pairing(user_id=user.id, name=request.name, platform=request.platform)
+    return {"success": True, **pairing}
+
+
+@app.post("/api/device/pair/complete")
+async def complete_device_pairing(request: DevicePairCompleteRequest):
+    result = models.complete_device_pairing(
+        pairing_code=request.pairing_code,
+        device_name=request.name,
+        platform=request.platform,
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
+
+    user_id = result["user_id"]
+    device_id = result["device_id"]
+    user_projects = models.get_user_projects(user_id)
+    for proj in user_projects:
+        models.link_device_project(device_id=device_id, project_id=proj["id"])
+    logger.info(
+        "device paired device_id=%s user_id=%s auto_linked_projects=%s",
+        device_id, user_id, len(user_projects),
+    )
+    return {"success": True, **result}
+
+
+@app.get("/api/device")
+async def list_user_devices(user: dict = Depends(get_current_user)):
+    return {"success": True, "devices": models.list_devices_for_user(user.id)}
+
+
+@app.post("/api/device/{device_id}/projects")
+async def link_device_to_project(
+    device_id: str,
+    request: DeviceProjectLinkRequest,
+    user: dict = Depends(get_current_user),
+):
+    _require_device_owner(user.id, device_id)
+    _require_project_owner(user.id, request.project_id)
+    linked = models.link_device_project(
+        device_id=device_id,
+        project_id=request.project_id,
+        local_path=request.local_path,
+    )
+    return {"success": True, "link": linked}
+
+
+@app.get("/api/device/{device_id}/projects")
+async def list_device_projects(device_id: str, user: dict = Depends(get_current_user)):
+    _require_device_owner(user.id, device_id)
+    return {"success": True, "links": models.get_device_project_links(device_id)}
+
+
+@app.get("/api/device/my-projects")
+async def list_my_device_projects(device: dict = Depends(get_current_device)):
+    """Device-token authenticated: returns project links for the calling device."""
+    return {"success": True, "links": models.get_device_project_links(device["id"])}
+
+
+@app.post("/api/device/link-project")
+async def link_project_for_current_device(
+    request: DeviceProjectLinkByNameRequest,
+    device: dict = Depends(get_current_device),
+):
+    """
+    Device-token authenticated endpoint for companion setup:
+    - upserts project by name for the device's user
+    - links that project to this device with local_path
+    """
+    project_name = (request.project_name or "").strip()
+    if not project_name:
+        raise HTTPException(status_code=400, detail="project_name is required")
+    local_path = (request.local_path or "").strip()
+    if not local_path:
+        raise HTTPException(status_code=400, detail="local_path is required")
+
+    project = models.upsert_project_by_name(
+        user_id=device["user_id"],
+        name=project_name,
+        file_path=local_path,
+    )
+    link = models.link_device_project(
+        device_id=device["id"],
+        project_id=project["id"],
+        local_path=local_path,
+    )
+    return {"success": True, "project": project, "link": link}
+
 
 # --- 5. THE CORE ENDPOINT (EAR + BRAIN + HANDS) ---
 @app.post("/transcribe")
@@ -468,7 +674,8 @@ async def transcribe_audio(
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 
 @app.get("/api/dashboard/{user_id}")
-async def get_dashboard(user_id: str):
+async def get_dashboard(user_id: str, user: dict = Depends(get_current_user)):
+    _require_user_match(user_id, user.id)
     projects = models.get_user_projects_with_task_counts(user_id)
     tasks = models.get_user_tasks(user_id)
     logger.debug("dashboard user_id=%s projects=%s tasks=%s", user_id, len(projects), len(tasks))
@@ -479,41 +686,49 @@ async def get_dashboard(user_id: str):
     }
 
 @app.get("/api/projects/{user_id}")
-async def get_user_projects(user_id: str):
+async def get_user_projects(user_id: str, user: dict = Depends(get_current_user)):
+    _require_user_match(user_id, user.id)
     return {"success": True, "projects": models.get_user_projects(user_id)}
 
 @app.post("/api/projects")
-async def create_project(request: CreateProjectRequest):
+async def create_project(request: CreateProjectRequest, user: dict = Depends(get_current_user)):
+    _require_user_match(request.user_id, user.id)
     models.upsert_user(user_id=request.user_id, email=f"{request.user_id}@local", phone_number=None)
     pid = models.create_project(request.user_id, request.name, request.file_path)
     return {"success": True, "project_id": pid}
 
 @app.get("/api/projects/{project_id}/tasks")
-async def get_project_tasks(project_id: str):
+async def get_project_tasks(project_id: str, user: dict = Depends(get_current_user)):
+    _require_project_owner(user.id, project_id)
     return {"success": True, "tasks": models.get_project_tasks(project_id)}
 
 @app.post("/api/tasks")
-async def create_task(request: CreateTaskRequest):
+async def create_task(request: CreateTaskRequest, user: dict = Depends(get_current_user)):
     if not request.user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
+    _require_user_match(request.user_id, user.id)
+    _require_project_owner(user.id, request.project_id)
     tid = models.create_task(request.project_id, request.user_id, request.description)
     return {"success": True, "task_id": tid}
 
 @app.patch("/api/tasks/{task_id}")
-async def update_task(task_id: str, request: UpdateTaskRequest):
+async def update_task(task_id: str, request: UpdateTaskRequest, user: dict = Depends(get_current_user)):
+    _require_task_owner(user.id, task_id)
     models.update_task_status(task_id, request.status)
     return {"success": True, "message": "Task updated"}
 
 @app.get("/api/call-sessions/{user_id}")
-async def get_call_history(user_id: str):
+async def get_call_history(user_id: str, user: dict = Depends(get_current_user)):
+    _require_user_match(user_id, user.id)
     sessions = models.get_user_call_history(user_id, limit=20)
     return {"success": True, "sessions": sessions}
 
 # --- 7. AGENT PIPELINE ENDPOINTS ---
 
 @app.get("/api/agent/status/{task_id}")
-async def get_agent_status(task_id: str):
+async def get_agent_status(task_id: str, user: dict = Depends(get_current_user)):
     """Get agent pipeline status for a specific task."""
+    _require_task_owner(user.id, task_id)
     executions = models.get_agent_executions(task_id)
     latest = models.get_task_agent_status(task_id)
     return {
@@ -525,8 +740,9 @@ async def get_agent_status(task_id: str):
 
 
 @app.get("/api/agent/executions/{user_id}")
-async def get_user_agent_executions(user_id: str):
+async def get_user_agent_executions(user_id: str, user: dict = Depends(get_current_user)):
     """Get all agent executions for a user."""
+    _require_user_match(user_id, user.id)
     executions = models.get_user_agent_executions(user_id)
     return {
         "success": True,
@@ -535,15 +751,9 @@ async def get_user_agent_executions(user_id: str):
 
 
 @app.post("/api/agent/dispatch/{task_id}")
-async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks):
+async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     """Manually trigger agent dispatch for a task."""
-    from database.connection import get_db_connection
-    conn = get_db_connection()
-    task_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    conn.close()
-    if not task_row:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task_dict = dict(task_row)
+    task_dict = _require_task_owner(user.id, task_id)
     intent_data = {
         "intent": task_dict.get("intent_type", "create_task"),
         "project_name": None,
@@ -564,24 +774,183 @@ async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTask
 # --- 8. TERMINAL ACCESS ENDPOINTS ---
 
 @app.post("/api/agent/terminal-access/{user_id}")
-async def grant_terminal_access(user_id: str):
+async def grant_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User grants permission for auto-terminal execution."""
+    _require_user_match(user_id, user.id)
     set_terminal_access(user_id, True)
     return {"success": True, "terminal_access": True, "message": "Terminal access granted. Tasks will auto-execute in terminal."}
 
 
 @app.delete("/api/agent/terminal-access/{user_id}")
-async def revoke_terminal_access(user_id: str):
+async def revoke_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """User revokes terminal execution permission."""
+    _require_user_match(user_id, user.id)
     set_terminal_access(user_id, False)
     return {"success": True, "terminal_access": False, "message": "Terminal access revoked."}
 
 
 @app.get("/api/agent/terminal-access/{user_id}")
-async def check_terminal_access(user_id: str):
+async def check_terminal_access(user_id: str, user: dict = Depends(get_current_user)):
     """Check if user has granted terminal access."""
+    _require_user_match(user_id, user.id)
     granted = get_terminal_access(user_id)
     return {"success": True, "terminal_access": granted}
+
+
+@app.post("/api/device/heartbeat")
+async def device_heartbeat(
+    request: DeviceHeartbeatRequest,
+    device: dict = Depends(get_current_device),
+):
+    if request.device_id != device.get("id"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    models.touch_device_heartbeat(device["id"])
+    return {"success": True, "device_id": device["id"]}
+
+
+@app.post("/api/device/claim-next")
+async def device_claim_next(
+    request: DeviceClaimRequest,
+    device: dict = Depends(get_current_device),
+):
+    wait_s = max(0, min(request.wait_seconds, 30))
+    try:
+        cmd = models.claim_next_queued_command_for_device(device_id=device["id"])
+    except Exception as exc:
+        logger.warning("device claim-next error device_id=%s err=%r", device["id"], exc)
+        cmd = None
+    if not cmd and wait_s > 0:
+        deadline = asyncio.get_running_loop().time() + wait_s
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.5)
+            try:
+                cmd = models.claim_next_queued_command_for_device(device_id=device["id"])
+            except Exception:
+                cmd = None
+            if cmd:
+                break
+    return {"success": True, "command": cmd}
+
+
+@app.post("/api/device/commands/{command_id}/append-logs")
+async def device_append_logs(
+    command_id: str,
+    request: AppendTerminalLogsRequest,
+    device: dict = Depends(get_current_device),
+):
+    cmd = _require_terminal_command_owner(device["user_id"], command_id)
+    seq = request.sequence_start
+    for chunk in request.chunks:
+        models.append_terminal_log_chunk(command_id=command_id, sequence=seq, stream=request.stream, chunk=chunk)
+        seq += 1
+    models.touch_device_heartbeat(device["id"])
+    return {"success": True, "command_id": cmd["id"], "next_sequence": seq}
+
+
+@app.post("/api/device/commands/{command_id}/complete")
+async def device_complete_command(
+    command_id: str,
+    request: CompleteTerminalCommandRequest,
+    device: dict = Depends(get_current_device),
+):
+    _require_terminal_command_owner(device["user_id"], command_id)
+    if request.status not in ("completed", "failed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    models.complete_terminal_command(command_id=command_id, status=request.status, exit_code=request.exit_code)
+    models.touch_device_heartbeat(device["id"])
+    return {"success": True}
+
+
+@app.post("/api/device/cursor-context")
+async def upsert_cursor_context(
+    request: CursorContextRequest,
+    device: dict = Depends(get_current_device),
+):
+    _require_project_owner(device["user_id"], request.project_id)
+    linked_projects = {row.get("project_id") for row in models.get_device_project_links(device["id"])}
+    if request.project_id not in linked_projects:
+        raise HTTPException(status_code=403, detail="Device is not linked to this project")
+    context_id = models.save_cursor_context(
+        device_id=device["id"],
+        project_id=request.project_id,
+        file_path=request.file_path,
+        selection=request.selection,
+        diagnostics=request.diagnostics,
+    )
+    models.touch_device_heartbeat(device["id"])
+    return {"success": True, "context_id": context_id}
+
+
+@app.post("/api/unified/commands")
+async def create_unified_command(
+    request: UnifiedCommandRequest,
+    user: dict = Depends(get_current_user),
+):
+    _require_project_owner(user.id, request.project_id)
+    from agents.command_builder import build_provider_command, normalize_provider
+
+    provider = normalize_provider(request.provider or models.get_default_provider_for_user(user.id))
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+    if request.device_id:
+        _require_device_owner(user.id, request.device_id)
+        context = models.get_latest_cursor_context(device_id=request.device_id, project_id=request.project_id)
+        if context:
+            file_path = context.get("file_path") or "(unknown file)"
+            selection = (context.get("selection") or "").strip()
+            diagnostics = (context.get("diagnostics") or "").strip()
+            prompt = (
+                f"{prompt}\n\n"
+                f"CursorContext file={file_path}\n"
+                f"Selection:\n{selection or '(none)'}\n"
+                f"Diagnostics:\n{diagnostics or '(none)'}"
+            )
+
+    session = models.get_or_create_terminal_session_for_project(
+        user_id=user.id,
+        project_id=request.project_id,
+        name=request.session_name or "Unified Session",
+    )
+    command = build_provider_command(provider=provider, prompt=prompt)
+    command_id = models.create_terminal_command(
+        session_id=session["id"],
+        user_id=user.id,
+        command=command,
+        source=request.source,
+        provider=provider,
+        user_prompt=prompt,
+        normalized_command=command,
+    )
+    logger.info(
+        "unified command queued user_id=%s project_id=%s session_id=%s provider=%s source=%s command_id=%s",
+        user.id,
+        request.project_id,
+        session["id"],
+        provider,
+        request.source,
+        command_id,
+    )
+    return {
+        "success": True,
+        "session_id": session["id"],
+        "command_id": command_id,
+        "provider": provider,
+        "normalized_command": command,
+    }
+
+
+@app.get("/api/unified/timeline")
+async def get_unified_timeline(
+    project_id: str | None = None,
+    limit: int = 100,
+    user: dict = Depends(get_current_user),
+):
+    safe_limit = max(1, min(limit, 200))
+    rows = models.list_recent_terminal_commands_for_user(user_id=user.id, limit=safe_limit)
+    if project_id:
+        rows = [r for r in rows if r.get("project_id") == project_id]
+    return {"success": True, "commands": rows}
 
 
 # --- 9. LOCAL AGENT (USER MACHINE) ENDPOINTS ---
@@ -753,7 +1122,16 @@ async def create_terminal_command(session_id: str, request: CreateTerminalComman
                 session = _require_terminal_session_owner(user.id, session_id)
         if not session.get("instance_id"):
             raise HTTPException(status_code=409, detail="No local agent connected for this session")
-    command_id = models.create_terminal_command(session_id=session_id, user_id=user.id, command=request.command)
+    provider = (request.provider or models.get_default_provider_for_user(user.id)).strip().lower()
+    command_id = models.create_terminal_command(
+        session_id=session_id,
+        user_id=user.id,
+        command=request.command,
+        source="typed",
+        provider=provider,
+        user_prompt=request.command,
+        normalized_command=request.command,
+    )
     return {"success": True, "command_id": command_id}
 
 

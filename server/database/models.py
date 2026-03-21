@@ -4,7 +4,7 @@ from __future__ import annotations
 from database.connection import get_db_connection
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import secrets
 import logging
@@ -142,6 +142,65 @@ def get_user_projects_with_task_counts(user_id):
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def _ensure_user_preferences_row(user_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_preferences(user_id: str) -> dict:
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT * FROM user_preferences WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"user_id": user_id}
+
+
+def get_default_provider_for_user(user_id: str) -> str:
+    prefs = get_user_preferences(user_id)
+    provider = (prefs.get("default_provider") or "cursor").strip().lower()
+    if provider not in {"cursor", "claude", "shell"}:
+        return "cursor"
+    return provider
+
+
+def set_default_provider_for_user(user_id: str, provider: str) -> None:
+    provider = (provider or "").strip().lower()
+    if provider not in {"cursor", "claude", "shell"}:
+        provider = "cursor"
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_preferences SET default_provider = ? WHERE user_id = ?",
+        (provider, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_terminal_access_for_user(user_id: str, granted: bool) -> None:
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_preferences SET terminal_access_granted = ? WHERE user_id = ?",
+        (1 if granted else 0, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_terminal_access_for_user(user_id: str) -> bool:
+    prefs = get_user_preferences(user_id)
+    return bool(prefs.get("terminal_access_granted"))
 
 # ==================== TASKS ====================
 
@@ -372,7 +431,7 @@ def store_agent_feedback(
         """
         INSERT INTO agent_executions
             (id, task_id, stage, agent_type, output_result, explanation, status, completed_at)
-        VALUES (?, ?, 'complete', 'copilot_agent', ?, ?, ?, ?)
+        VALUES (?, ?, 'complete', 'dispatcher', ?, ?, ?, ?)
         """,
         (exec_id, task_id, output, explanation, status, datetime.now().isoformat()),
     )
@@ -589,15 +648,35 @@ def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list
     return [dict(r) for r in rows]
 
 
-def create_terminal_command(*, session_id: str, user_id: str, command: str) -> str:
+def create_terminal_command(
+    *,
+    session_id: str,
+    user_id: str,
+    command: str,
+    source: str = "typed",
+    provider: str = "shell",
+    user_prompt: str | None = None,
+    normalized_command: str | None = None,
+) -> str:
     conn = get_db_connection()
     command_id = str(uuid.uuid4())
+    normalized = normalized_command or command
     conn.execute(
         """
-        INSERT INTO terminal_commands (id, session_id, user_id, command, status)
-        VALUES (?, ?, ?, ?, 'queued')
+        INSERT INTO terminal_commands
+            (id, session_id, user_id, command, source, provider, user_prompt, normalized_command, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued')
         """,
-        (command_id, session_id, user_id, command),
+        (
+            command_id,
+            session_id,
+            user_id,
+            command,
+            source,
+            provider,
+            user_prompt,
+            normalized,
+        ),
     )
     conn.execute(
         "UPDATE terminal_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -629,6 +708,74 @@ def get_terminal_command(command_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM terminal_commands WHERE id = ?", (command_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_or_create_terminal_session_for_project(
+    *,
+    user_id: str,
+    project_id: str,
+    name: str = "Unified Session",
+    within_seconds: int = 180,
+) -> dict:
+    active = get_active_instances_for_project(project_id, within_seconds=within_seconds)
+    instance_id = active[0]["id"] if active else None
+
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM terminal_sessions
+        WHERE user_id = ? AND project_id = ? AND name = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (user_id, project_id, name),
+    ).fetchone()
+    conn.close()
+
+    if row:
+        session = dict(row)
+        if not session.get("instance_id") and instance_id:
+            bind_terminal_session_instance(session["id"], instance_id)
+            refreshed = get_terminal_session(session["id"])
+            return refreshed or session
+        return session
+
+    session_id = create_terminal_session(
+        user_id=user_id,
+        project_id=project_id,
+        name=name,
+        instance_id=instance_id,
+        status="pending",
+    )
+    created = get_terminal_session(session_id)
+    return created or {"id": session_id, "project_id": project_id, "user_id": user_id}
+
+
+def list_recent_terminal_commands_for_user(
+    *,
+    user_id: str,
+    limit: int = 100,
+) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            tc.*,
+            ts.project_id,
+            ts.name AS session_name,
+            p.name AS project_name
+        FROM terminal_commands tc
+        JOIN terminal_sessions ts ON ts.id = tc.session_id
+        LEFT JOIN projects p ON p.id = ts.project_id
+        WHERE tc.user_id = ?
+        ORDER BY tc.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
@@ -743,6 +890,46 @@ def get_terminal_logs_for_command(
     return [dict(r) for r in rows]
 
 
+def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
+    """
+    Claim the oldest queued command where command session project is linked to device.
+    Returns the command dict with project_id and local_path attached.
+    """
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT tc.*, ts.project_id, dpl.local_path AS project_local_path
+            FROM terminal_commands tc
+            JOIN terminal_sessions ts ON ts.id = tc.session_id
+            JOIN device_project_links dpl ON dpl.project_id = ts.project_id
+            WHERE dpl.device_id = ?
+              AND tc.status = 'queued'
+            ORDER BY tc.created_at ASC
+            LIMIT 1
+            """,
+            (device_id,),
+        ).fetchone()
+        if not row:
+            return None
+        command_id = row["id"]
+        res = conn.execute(
+            """
+            UPDATE terminal_commands
+            SET status = 'running', started_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'queued'
+            """,
+            (command_id,),
+        )
+        if res.rowcount != 1:
+            conn.commit()
+            return None
+        conn.commit()
+        return dict(row)
+    finally:
+        conn.close()
+
+
 # ==================== AGENT TOKENS (Local Agent Pairing) ====================
 
 def _hash_agent_token(token: str) -> str:
@@ -825,6 +1012,200 @@ def get_user_id_for_agent_token(token: str) -> str | None:
     conn.commit()
     conn.close()
     return user_id
+
+
+def _hash_device_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_device_pairing(*, user_id: str, name: str | None, platform: str | None, expires_minutes: int = 10) -> dict:
+    conn = get_db_connection()
+    device_id = str(uuid.uuid4())
+    pairing_code = secrets.token_urlsafe(8)
+    expires_at = (datetime.utcnow() + timedelta(minutes=expires_minutes)).isoformat()
+    conn.execute(
+        """
+        INSERT INTO companion_devices
+            (id, user_id, name, platform, status, pairing_code, pairing_expires_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (device_id, user_id, name, platform, pairing_code, expires_at),
+    )
+    conn.commit()
+    conn.close()
+    return {"device_id": device_id, "pairing_code": pairing_code, "expires_at": expires_at}
+
+
+def complete_device_pairing(*, pairing_code: str, device_name: str | None = None, platform: str | None = None) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM companion_devices
+        WHERE pairing_code = ?
+          AND status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (pairing_code,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    device = dict(row)
+    expires_at = device.get("pairing_expires_at")
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
+        conn.close()
+        return None
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_device_token(token)
+    conn.execute(
+        """
+        UPDATE companion_devices
+        SET name = COALESCE(?, name),
+            platform = COALESCE(?, platform),
+            status = 'online',
+            pairing_code = NULL,
+            pairing_expires_at = NULL,
+            device_token_hash = ?,
+            last_heartbeat = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (device_name, platform, token_hash, device["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return {"device_id": device["id"], "user_id": device["user_id"], "device_token": token}
+
+
+def get_device_by_token(device_token: str) -> dict | None:
+    token_hash = _hash_device_token(device_token)
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM companion_devices
+        WHERE device_token_hash = ?
+        LIMIT 1
+        """,
+        (token_hash,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def touch_device_heartbeat(device_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE companion_devices SET status = 'online', last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?",
+        (device_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_devices_for_user(user_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT id, user_id, name, platform, status, last_heartbeat, created_at
+        FROM companion_devices
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def link_device_project(*, device_id: str, project_id: str, local_path: str | None = None) -> dict:
+    conn = get_db_connection()
+    existing = conn.execute(
+        """
+        SELECT *
+        FROM device_project_links
+        WHERE device_id = ? AND project_id = ?
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+    if existing:
+        row = dict(existing)
+        if local_path and row.get("local_path") != local_path:
+            conn.execute(
+                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
+                (local_path, row["id"]),
+            )
+            conn.commit()
+            row["local_path"] = local_path
+        conn.close()
+        return row
+    link_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO device_project_links (id, device_id, project_id, local_path)
+        VALUES (?, ?, ?, ?)
+        """,
+        (link_id, device_id, project_id, local_path),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": link_id, "device_id": device_id, "project_id": project_id, "local_path": local_path}
+
+
+def get_device_project_links(device_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT dpl.*, p.name AS project_name
+        FROM device_project_links dpl
+        LEFT JOIN projects p ON p.id = dpl.project_id
+        WHERE dpl.device_id = ?
+        ORDER BY dpl.created_at DESC
+        """,
+        (device_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_cursor_context(
+    *,
+    device_id: str,
+    project_id: str,
+    file_path: str | None,
+    selection: str | None,
+    diagnostics: str | None,
+) -> str:
+    conn = get_db_connection()
+    context_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO cursor_context_snapshots (id, device_id, project_id, file_path, selection, diagnostics)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (context_id, device_id, project_id, file_path, selection, diagnostics),
+    )
+    conn.commit()
+    conn.close()
+    return context_id
+
+
+def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM cursor_context_snapshots
+        WHERE device_id = ? AND project_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 # ==================== USER DATA DELETION ====================
@@ -934,6 +1315,46 @@ def delete_user_history(user_id: str) -> dict:
             (user_id,),
         ).fetchone()[0]
         conn.execute("DELETE FROM instances WHERE user_id = ?", (user_id,))
+
+        counts["cursor_context_snapshots"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM cursor_context_snapshots ccs
+            JOIN companion_devices cd ON cd.id = ccs.device_id
+            WHERE cd.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            DELETE FROM cursor_context_snapshots
+            WHERE device_id IN (SELECT id FROM companion_devices WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+
+        counts["device_project_links"] = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM device_project_links dpl
+            JOIN companion_devices cd ON cd.id = dpl.device_id
+            WHERE cd.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            DELETE FROM device_project_links
+            WHERE device_id IN (SELECT id FROM companion_devices WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+
+        counts["companion_devices"] = conn.execute(
+            "SELECT COUNT(*) FROM companion_devices WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM companion_devices WHERE user_id = ?", (user_id,))
 
         conn.commit()
         return counts

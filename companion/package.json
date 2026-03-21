@@ -1,0 +1,14 @@
+{
+  "name": "dispatch-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "setup": "node src/index.js setup"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

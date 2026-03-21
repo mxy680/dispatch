@@ -50,7 +50,7 @@ class Config:
     instance_token: str
     heartbeat_interval_s: int = 10
     poll_interval_s: float = 1.0
-    claim_wait_seconds: int = 5
+    claim_wait_seconds: int = 20
     log_chunk_bytes: int = 4000
 
 

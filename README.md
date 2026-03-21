@@ -1,65 +1,42 @@
 # CallStack
 
-Voice-controlled Claude Code orchestration via phone call.
+Voice and typed command orchestration for local coding agents.
 
 ## What is this?
 
-CallStack lets developers manage Claude Code instances on their local machine by calling a phone number. You talk to an AI orchestrator, issue coding commands, and your local Claude Code instance executes them—no keyboard required. A web dashboard handles project management and task history.
+CallStack lets developers speak or type coding requests in a hosted dashboard, then execute them on their own machine through a companion process. The companion bridges to local coding-agent CLIs (Cursor, Claude) and streams output back to the web app.
 
 ## Features
 
-**Voice-to-Intent Parsing** — Natural language understanding that converts spoken commands into actionable coding tasks.
+**Unified Command Center** — Voice and typed input feed one command timeline.
 
-**Orchestrator Agent** — An AI intermediary that interprets your requests, manages context, and coordinates with your local machine.
+**Local Agent Bridge** — Commands execute locally on the user machine through the helper daemon.
 
-**Claude Code Instance Management** — Spin up, monitor, and control Claude Code sessions remotely through voice commands.
+**Provider-CLI First** — Supports Cursor CLI and Claude CLI (with shell fallback).
 
-**Twilio Telephony Integration** — Call from any phone, anywhere. The system handles the connection between your voice and your codebase.
+**Project Context Persistence** — Commands are grouped by project/session with durable history.
 
-**Project Context Persistence** — The orchestrator remembers your projects, preferences, and ongoing tasks across sessions.
+**Authentication** — Browser API uses Supabase JWT; local helper uses scoped agent tokens.
 
-**Authentication** — Secure access control so only you can command your development environment.
-
-**Real-time Status Updates** — Get spoken feedback on task progress, errors, and completions during your call.
-
-**Web Dashboard** — React-based interface for project management, viewing task history, and configuration.
+**Streaming Logs** — `stdout` / `stderr` logs stream back to the dashboard.
 
 ## How It Works
 
-```
-┌─────────────┐     ┌─────────────┐     ┌──────────────────┐     ┌─────────────┐     ┌─────────────┐
-│             │     │             │     │                  │     │             │     │             │
-│  Phone Call │────▶│   Twilio    │────▶│   Orchestrator   │────▶│ Local Agent │────▶│ Claude Code │
-│             │     │             │     │                  │     │             │     │             │
-└─────────────┘     └─────────────┘     └──────────────────┘     └─────────────┘     └─────────────┘
-                                                │                                            │
-                          STT (Deepgram/Whisper)│                                            │
-                          TTS (ElevenLabs)      │                                            ▼
-                                                │                                     ┌─────────────┐
-                                                │                                     │             │
-                                                └────────────────────────────────────▶│  Codebase   │
-                                                         context & status             │             │
-                                                                                      └─────────────┘
-```
-
-1. You call the CallStack phone number
-2. Twilio receives the call and streams audio to our orchestrator
-3. Speech-to-text converts your voice to commands
-4. The orchestrator interprets intent and sends instructions to your local agent
-5. The local agent manages Claude Code execution on your machine
-6. Results flow back through the chain as spoken responses
+1. User speaks or types a request in Dashboard.
+2. Backend parses intent and builds a provider CLI command.
+3. Command is enqueued in `terminal_commands` (single execution queue).
+4. Local helper claims the command, executes it in project context, and streams logs.
+5. Dashboard timeline updates with status and output.
 
 ## Tech Stack
 
-**Backend**: Python, FastAPI, Anthropic SDK
+**Backend**: Python, FastAPI
 
-**Telephony**: Twilio Voice API
-
-**Speech**: Deepgram or Whisper (STT), ElevenLabs (TTS)
+**Speech**: Whisper (voice input path)
 
 **Frontend**: React, Next.js
 
-**Database**: SQLite (dev), PostgreSQL (prod)
+**Database**: SQLite
 
 **Infrastructure**: Docker
 
@@ -78,15 +55,24 @@ cp .env.example .env
 pip install -r requirements.txt
 npm install --prefix frontend
 
-# Run the local agent
-python agent/main.py
+# Run the backend
+uvicorn main:app --reload
 
-# Start the orchestrator server
-python server/main.py
+# Pair and run local helper (from repo root)
+python3 local-agent/dispatch_local_agent.py \
+  --backend-url "http://localhost:8000" \
+  --project-path "/absolute/path/to/project" \
+  --agent-token "<token_from_dashboard_settings>"
 
 # Launch the dashboard (separate terminal)
-npm run dev --prefix frontend
+npm run dev --prefix web
 ```
+
+## Companion and Cursor extension (scaffold)
+
+- Desktop companion scaffold: `companion/`
+- Cursor extension scaffold: `cursor-extension/`
+- Architecture note: `docs/plans/2026-03-16-companion-cursor-scaffold.md`
 
 *Full setup documentation coming soon.*
 

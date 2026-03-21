@@ -34,7 +34,19 @@ Optional:
 
 In development, if the backend runs with `DEVELOPMENT_MODE=true`, the web UI calls may still work without auth, but agent pairing always uses `--agent-token`.
 
+## Provider CLIs
+
+The unified pipeline sends commands to your chosen local provider:
+
+- `cursor` -> `cursor --command "<prompt>"`
+- `claude` -> `claude -p "<prompt>"`
+- `shell` -> raw shell command
+
+Install Cursor CLI or Claude CLI locally for best results.
+
 ## Security notes
 
-- This agent runs **as your local OS user** and can execute commands with your permissions.\n+- Only run it on machines you trust.\n+- For public SaaS hardening, replace `--auth-token` with a dedicated device token / API key flow.
+- This agent runs **as your local OS user** and executes commands with your permissions.
+- Only run it on machines you trust.
+- For public SaaS hardening, replace broad command execution with allowlists and policy checks.
 

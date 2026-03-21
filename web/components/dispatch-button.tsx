@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
+import { authFetch } from "@/lib/supabase/access-token";
 
 export function DispatchButton({ taskId }: { taskId: string }) {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [dispatching, setDispatching] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
@@ -9,9 +11,7 @@ export function DispatchButton({ taskId }: { taskId: string }) {
     setDispatching(true);
     setResult(null);
     try {
-      const res = await fetch(`http://localhost:8000/api/agent/dispatch/${taskId}`, {
-        method: "POST",
-      });
+      const res = await authFetch(`${backendUrl}/api/agent/dispatch/${taskId}`, { method: "POST" });
       const data = await res.json();
       if (data.success) {
         setResult("✓ Dispatched");
