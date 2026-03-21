@@ -734,28 +734,15 @@ def list_recent_terminal_commands_for_user(
     return result
 
 
-def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
-    """Claim the oldest queued command for the project this instance is registered to."""
+def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
+    """Claim the oldest queued command across ALL of the user's projects."""
     sb = get_sb()
 
-    # Look up which project this instance belongs to.
-    inst_res = sb.table("instances").select("project_id").eq("id", instance_id).maybe_single().execute()
-    inst = inst_res.data if inst_res else None
-    if not inst or not inst.get("project_id"):
-        return None
-    project_id = inst["project_id"]
-
-    # Find sessions for that project.
-    sessions_res = sb.table("terminal_sessions").select("id").eq("project_id", project_id).execute()
-    session_ids = [s["id"] for s in (sessions_res.data or [])]
-    if not session_ids:
-        return None
-
-    # Find oldest queued command in those sessions.
+    # Find the oldest queued command belonging to this user.
     cmd_res = (
         sb.table("terminal_commands")
         .select("*")
-        .in_("session_id", session_ids)
+        .eq("user_id", user_id)
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
@@ -777,6 +764,15 @@ def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
     verified = verify_res.data if verify_res else None
     if not verified or verified.get("status") != "running":
         return None
+
+    # Attach project file_path so the agent knows where to run.
+    session_id = verified.get("session_id")
+    if session_id:
+        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).maybe_single().execute()
+        if sess_res and sess_res.data:
+            proj_res = sb.table("projects").select("file_path").eq("id", sess_res.data["project_id"]).maybe_single().execute()
+            if proj_res and proj_res.data:
+                verified["project_path"] = proj_res.data.get("file_path")
 
     return verified
 

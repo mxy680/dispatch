@@ -1182,12 +1182,12 @@ async def local_agent_claim_next(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     wait_s = max(0, min(request.wait_seconds, 30))
-    cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
+    cmd = models.claim_next_queued_command_for_user(user_id=agent_user_id)
     if not cmd and wait_s > 0:
         deadline = asyncio.get_running_loop().time() + wait_s
         while asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.5)
-            cmd = models.claim_next_queued_command_for_instance(instance_id=request.instance_id)
+            cmd = models.claim_next_queued_command_for_user(user_id=agent_user_id)
             if cmd:
                 break
     return {"success": True, "command": cmd}

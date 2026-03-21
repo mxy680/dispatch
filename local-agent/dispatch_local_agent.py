@@ -209,9 +209,19 @@ def main() -> int:
 
         idle_polls = 0
 
-        print(f"[local-agent] running command_id={command_id} cmd={command_text!r}")
+        # Use project_path from the command if available (supports multi-project).
+        cmd_project_path = cmd.get("project_path") or cfg.project_path
+        if cmd_project_path and os.path.isdir(cmd_project_path):
+            effective_project_path = cmd_project_path
+        else:
+            effective_project_path = cfg.project_path
+            if cmd_project_path and not os.path.isdir(cmd_project_path):
+                os.makedirs(cmd_project_path, exist_ok=True)
+                effective_project_path = cmd_project_path
 
-        cwd = session_cwd.get(session_id) or cfg.project_path
+        print(f"[local-agent] running command_id={command_id} cwd={effective_project_path} cmd={command_text!r}")
+
+        cwd = session_cwd.get(session_id) or effective_project_path
         stdout = ""
         stderr = ""
         exit_code = 0
