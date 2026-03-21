@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getAuthHeader } from "@/lib/supabase/access-token";
+import { authFetch } from "@/lib/supabase/access-token";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,11 @@ type TerminalLog = {
   created_at: string;
 };
 
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projects[0]?.id ?? "");
@@ -71,12 +76,7 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     if (!selectedProjectId) return;
     try {
       setErr(null);
-      const auth = await getAuthHeader();
-      if (!auth) return;
-      const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedProjectId}`, {
-        headers: { ...auth },
-        cache: "no-store",
-      });
+      const res = await authFetch(`${backendUrl}/api/terminal/sessions/${selectedProjectId}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to load sessions");
       const next = (data.sessions ?? []) as TerminalSession[];
@@ -85,20 +85,15 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       if (selectedSessionId && !next.some((s) => s.id === selectedSessionId)) {
         setSelectedSessionId(next[0]?.id ?? "");
       }
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to load sessions");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to load sessions"));
     }
   }, [backendUrl, selectedProjectId, selectedSessionId]);
 
   const fetchCommands = useCallback(async () => {
     if (!selectedSessionId) return;
     try {
-      const auth = await getAuthHeader();
-      if (!auth) return;
-      const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
-        headers: { ...auth },
-        cache: "no-store",
-      });
+      const res = await authFetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to load commands");
       const next = (data.commands ?? []) as TerminalCommand[];
@@ -111,15 +106,10 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
   const fetchLogs = useCallback(async () => {
     if (!activeCommandId) return;
     try {
-      const auth = await getAuthHeader();
-      if (!auth) return;
       const params = new URLSearchParams();
       if (afterSeqRef.current !== null) params.set("after_sequence", String(afterSeqRef.current));
       params.set("limit", "200");
-      const res = await fetch(`${backendUrl}/api/terminal/commands/${activeCommandId}/logs?${params}`, {
-        headers: { ...auth },
-        cache: "no-store",
-      });
+      const res = await authFetch(`${backendUrl}/api/terminal/commands/${activeCommandId}/logs?${params}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) return;
       const next = (data.logs ?? []) as TerminalLog[];
@@ -167,22 +157,17 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     setLoading(true);
     try {
       setErr(null);
-      const auth = await getAuthHeader();
-      if (!auth) {
-        setErr("Please sign in again.");
-        return;
-      }
-      const res = await fetch(`${backendUrl}/api/terminal/sessions`, {
+      const res = await authFetch(`${backendUrl}/api/terminal/sessions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...auth },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: selectedProjectId, name: "Project Terminal" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to create session");
       await fetchSessions();
       if (data.session_id) setSelectedSessionId(data.session_id);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to create session");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to create session"));
     } finally {
       setLoading(false);
     }
@@ -193,14 +178,9 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
     setLoading(true);
     try {
       setErr(null);
-      const auth = await getAuthHeader();
-      if (!auth) {
-        setErr("Please sign in again.");
-        return;
-      }
-      const res = await fetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
+      const res = await authFetch(`${backendUrl}/api/terminal/sessions/${selectedSessionId}/commands`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...auth },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: commandText }),
       });
       const data = await res.json();
@@ -211,8 +191,8 @@ export function TerminalConsole({ projects }: { projects: ProjectOption[] }) {
       afterSeqRef.current = null;
       setLogIdlePolls(0);
       await fetchCommands();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to queue command");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to queue command"));
     } finally {
       setLoading(false);
     }

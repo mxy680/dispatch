@@ -8,3 +8,10 @@ docs/
 CLAUDE.md
 web/package-lock.json
 *.pyc
+/server/__pycache__
+server/__pycache__/main.cpython-310.pyc
+/companion/dist/mac-arm64/Dispatch Companion.app/Contents/_CodeSignature
+/companion/dist/mac-arm64/Dispatch Companion.app/Contents/Frameworks/Dispatch Companion Helper (GPU).app/Contents/_CodeSignature
+/companion/dist/mac-arm64
+/companion/node_modules
+/companion/dist

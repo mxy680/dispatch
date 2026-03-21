@@ -5,61 +5,88 @@ let cacheTs = 0;
 const LS_KEY = "dispatch_access_token";
 const LS_TS_KEY = "dispatch_access_token_ts";
 
-// Cache token for up to 24 hours; Supabase will still 401 if it's actually invalid.
-const CACHE_MS = 24 * 60 * 60 * 1000; // 24 hours
+const REFRESH_MARGIN_S = 60;
 
-function loadFromStorage() {
-  if (typeof window === "undefined") return;
-  if (cachedToken) return;
-  const token = window.localStorage.getItem(LS_KEY);
-  const tsRaw = window.localStorage.getItem(LS_TS_KEY);
-  const ts = tsRaw ? Number(tsRaw) : 0;
-  if (token && ts) {
-    cachedToken = token;
-    cacheTs = ts;
+function getJwtExp(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const decoded = JSON.parse(atob(payload));
+    return typeof decoded.exp === "number" ? decoded.exp : null;
+  } catch {
+    return null;
   }
 }
 
-function saveToStorage(token: string | null, ts: number) {
-  if (typeof window === "undefined") return;
-  if (!token) return;
-  window.localStorage.setItem(LS_KEY, token);
-  window.localStorage.setItem(LS_TS_KEY, String(ts));
+function isTokenUsable(token: string | null): boolean {
+  if (!token) return false;
+  const exp = getJwtExp(token);
+  if (!exp) return false;
+  return exp - REFRESH_MARGIN_S > Date.now() / 1000;
 }
 
-export async function getAccessToken(): Promise<string | null> {
-  loadFromStorage();
-  const now = Date.now();
-  if (cachedToken && now - cacheTs < CACHE_MS) return cachedToken;
+function loadFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  if (cachedToken && isTokenUsable(cachedToken)) return cachedToken;
+  const stored = window.localStorage.getItem(LS_KEY);
+  if (stored && isTokenUsable(stored)) {
+    cachedToken = stored;
+    return stored;
+  }
+  return null;
+}
 
+function saveToStorage(token: string) {
+  cachedToken = token;
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(LS_KEY, token);
+  }
+}
+
+function clearCache() {
+  cachedToken = null;
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(LS_KEY);
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function getAccessToken(forceRefresh = false): Promise<string | null> {
+  if (!forceRefresh) {
+    const usable = loadFromStorage();
+    if (usable) return usable;
+  }
+
+  clearCache();
   const supabase = createClient();
 
-  // Prefer getSession (cheap, no refresh).
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token ?? null;
-  if (token) {
-    cachedToken = token;
-    cacheTs = now;
-    saveToStorage(token, now);
-    return token;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token ?? null;
+    if (token && isTokenUsable(token)) {
+      saveToStorage(token);
+      return token;
+    }
+    await sleep(150 * (attempt + 1));
   }
 
-  // Fallback: refresh once if needed.
   const { data, error } = await supabase.auth.refreshSession();
-  if (error) return null;
-  const refreshed = data.session?.access_token ?? null;
-  if (refreshed) {
-    cachedToken = refreshed;
-    cacheTs = now;
-    saveToStorage(refreshed, now);
+  if (!error) {
+    const refreshed = data.session?.access_token ?? null;
+    if (refreshed && isTokenUsable(refreshed)) {
+      saveToStorage(refreshed);
+      return refreshed;
+    }
   }
-  // If refresh fails to produce a token, keep previous cached token as best-effort.
-  if (!refreshed && cachedToken) return cachedToken;
-  return refreshed;
+
+  return null;
 }
 
-export async function getAuthHeader(): Promise<{ Authorization: string } | null> {
-  const token = await getAccessToken();
+export async function getAuthHeader(forceRefresh = false): Promise<{ Authorization: string } | null> {
+  const token = await getAccessToken(forceRefresh);
   if (!token) return null;
   return { Authorization: `Bearer ${token}` };
 }
@@ -73,3 +100,25 @@ export function clearAccessToken() {
   }
 }
 
+export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  let auth = await getAuthHeader();
+  if (!auth) auth = await getAuthHeader(true);
+  if (!auth) throw new Error("No auth token available. Please sign in again.");
+
+  const res = await fetch(url, {
+    ...init,
+    headers: { ...init?.headers, ...auth },
+  });
+
+  if (res.status === 401) {
+    const freshAuth = await getAuthHeader(true);
+    if (!freshAuth) throw new Error("Session expired. Please sign in again.");
+    const retry = await fetch(url, {
+      ...init,
+      headers: { ...init?.headers, ...freshAuth },
+    });
+    return retry;
+  }
+
+  return res;
+}

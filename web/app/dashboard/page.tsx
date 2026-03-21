@@ -12,6 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
+import { UnifiedCommandCenter } from "@/components/unified-command-center";
+import Link from "next/link";
 
 type ProjectRow = {
   id: string;
@@ -31,7 +34,6 @@ type TaskRow = {
   status: string;
   created_at: string;
   intent_type?: string | null;
-  raw_transcript?: string | null;
 };
 
 function statusBadge(status: string) {
@@ -59,9 +61,15 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
   const backendUrl = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const dashRes = await fetch(`${backendUrl}/api/dashboard/${user.id}`, { cache: "no-store" });
+  const dashRes = await fetch(`${backendUrl}/api/dashboard/${user.id}`, {
+    cache: "no-store",
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+  });
   const dashJson = (await dashRes.json()) as { projects: ProjectRow[]; tasks: TaskRow[] };
 
   const projects = dashJson.projects ?? [];
@@ -70,7 +78,33 @@ export default async function DashboardPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <DashboardPoller intervalMs={5000} />
-      {/* ── Command Input ── */}
+
+      {/* ── Navigation ── */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Dispatch</h1>
+          <p className="text-gray-400 text-sm">
+            Connected as{" "}
+            <span className="text-supabase-green font-mono">{user.phone || user.email}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <Link href="/dashboard/history" className="text-gray-400 hover:text-white transition-colors">
+            History
+          </Link>
+          <Link href="/dashboard/settings" className="text-gray-400 hover:text-white transition-colors">
+            Settings
+          </Link>
+        </div>
+      </div>
+
+      {/* ── Terminal Access Toggle ── */}
+      <TerminalAccessToggle userId={user.id} />
+
+      {/* ── Unified Command Center ── */}
+      <UnifiedCommandCenter projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
+
+      {/* ── Voice Command Input ── */}
       <VoiceRecorder />
 
       {/* ── Projects ── */}
@@ -130,9 +164,6 @@ export default async function DashboardPage() {
                     <p className="text-sm font-medium truncate">{t.description}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {t.project_name ?? "Unknown project"}
-                      {t.raw_transcript && (
-                        <span className="ml-2 italic">&quot;{t.raw_transcript}&quot;</span>
-                      )}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

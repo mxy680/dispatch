@@ -5,9 +5,14 @@ from __future__ import annotations
 from database.supabase_client import get_sb
 import uuid
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import secrets
+import logging
+import os
+import re
+
+logger = logging.getLogger("callstack.db")
 
 
 def _now_iso() -> str:
@@ -24,9 +29,9 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
     try:
         sb.table("users").upsert(data, on_conflict="id").execute()
     except Exception as e:
-        print(f"[DB] upsert_user primary upsert failed, trying email conflict: {e}")
+        logger.warning("upsert_user primary upsert failed, trying email conflict: %s", e)
         sb.table("users").upsert(data, on_conflict="email").execute()
-    print(f"[DB] upsert_user user_id={user_id} email={email!r} phone={phone_number!r}")
+    logger.debug("upsert_user user_id=%s email=%r phone=%r", user_id, email, phone_number)
 
 
 # ==================== PROJECTS ====================
@@ -34,20 +39,28 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
 def create_project(user_id, name, file_path=None):
     sb = get_sb()
     project_id = str(uuid.uuid4())
+    if file_path is None:
+        file_path = compute_default_project_file_path(get_project_base_path_for_user(user_id), name)
+
     sb.table("projects").insert({
         "id": project_id,
         "user_id": user_id,
         "name": name,
         "file_path": file_path,
     }).execute()
-    print(f"[DB] create_project id={project_id} user_id={user_id} name={name!r}")
+
+    # Ensure companion devices can claim this project's local folder.
+    if file_path:
+        link_device_project_local_path_if_missing_for_user_devices(user_id=user_id, project_id=project_id, local_path=file_path)
+
+    logger.debug("create_project id=%s user_id=%s name=%r", project_id, user_id, name)
     return project_id
 
 
 def touch_project(project_id: str):
     sb = get_sb()
     sb.table("projects").update({"last_accessed": _now_iso()}).eq("id", project_id).execute()
-    print(f"[DB] touch_project project_id={project_id}")
+    logger.debug("touch_project project_id=%s", project_id)
 
 
 def get_user_projects(user_id):
@@ -71,6 +84,7 @@ def get_project_by_name(user_id, name):
 def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
     existing = get_project_by_name(user_id, name)
     if existing:
+        # If caller provided file_path, use it.
         if file_path and (existing.get("file_path") != file_path):
             sb = get_sb()
             sb.table("projects").update({
@@ -78,6 +92,26 @@ def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = N
                 "last_accessed": _now_iso(),
             }).eq("id", existing["id"]).execute()
             existing["file_path"] = file_path
+        # If file_path still missing, try computing from user base path.
+        if not existing.get("file_path"):
+            computed = compute_default_project_file_path(get_project_base_path_for_user(user_id), name)
+            if computed:
+                conn = get_db_connection()
+                conn.execute(
+                    "UPDATE projects SET file_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+                    (computed, existing["id"]),
+                )
+                conn.commit()
+                conn.close()
+                existing["file_path"] = computed
+
+        # If we now have a file_path, ensure devices can claim it (but don't override non-empty local_path).
+        if existing.get("file_path"):
+            link_device_project_local_path_if_missing_for_user_devices(
+                user_id=user_id,
+                project_id=existing["id"],
+                local_path=existing["file_path"],
+            )
         return existing
 
     project_id = create_project(user_id, name, file_path=file_path)
@@ -90,6 +124,110 @@ def get_user_projects_with_task_counts(user_id):
     res = sb.rpc("get_user_projects_with_task_counts", {"p_user_id": user_id}).execute()
     return res.data or []
 
+
+
+def _ensure_user_preferences_row(user_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_preferences(user_id: str) -> dict:
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT * FROM user_preferences WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"user_id": user_id}
+
+
+def get_default_provider_for_user(user_id: str) -> str:
+    prefs = get_user_preferences(user_id)
+    provider = (prefs.get("default_provider") or "cursor").strip().lower()
+    if provider not in {"cursor", "claude", "shell"}:
+        return "cursor"
+    return provider
+
+
+def set_default_provider_for_user(user_id: str, provider: str) -> None:
+    provider = (provider or "").strip().lower()
+    if provider not in {"cursor", "claude", "shell"}:
+        provider = "cursor"
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_preferences SET default_provider = ? WHERE user_id = ?",
+        (provider, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_terminal_access_for_user(user_id: str, granted: bool) -> None:
+    _ensure_user_preferences_row(user_id)
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_preferences SET terminal_access_granted = ? WHERE user_id = ?",
+        (1 if granted else 0, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_terminal_access_for_user(user_id: str) -> bool:
+    prefs = get_user_preferences(user_id)
+    return bool(prefs.get("terminal_access_granted"))
+
+# ==================== PROJECT BASE PATH ====================
+
+def get_project_base_path_for_user(user_id: str) -> str | None:
+    prefs = get_user_preferences(user_id)
+    base_path = prefs.get("project_base_path")
+    if not base_path:
+        return None
+    base_path = str(base_path).strip()
+    return base_path if base_path else None
+
+
+def set_project_base_path_for_user(user_id: str, base_path: str | None) -> None:
+    _ensure_user_preferences_row(user_id)
+    base_path = (base_path or "").strip()
+    conn = get_db_connection()
+    if not base_path:
+        conn.execute("UPDATE user_preferences SET project_base_path = NULL WHERE user_id = ?", (user_id,))
+    else:
+        # Store as-is; worker will create folders locally.
+        conn.execute("UPDATE user_preferences SET project_base_path = ? WHERE user_id = ?", (base_path, user_id))
+    conn.commit()
+    conn.close()
+
+
+def _safe_project_folder_name(name: str) -> str:
+    # Convert a project name into a filesystem-friendly folder name.
+    n = (name or "").strip()
+    if not n:
+        n = "Project"
+    # Avoid path traversal and invalid separators.
+    n = n.replace("\\", "-").replace("/", "-")
+    n = re.sub(r"[^A-Za-z0-9._-]+", "-", n)
+    n = n.strip("-") or "Project"
+    return n
+
+
+def compute_default_project_file_path(base_path: str | None, project_name: str) -> str | None:
+    if not base_path:
+        return None
+    base_path = str(base_path).strip()
+    if not base_path or not os.path.isabs(base_path):
+        return None
+    safe_name = _safe_project_folder_name(project_name)
+    return os.path.join(base_path, safe_name)
 
 # ==================== TASKS ====================
 
@@ -116,11 +254,7 @@ def create_task(
         "intent_confidence": intent_confidence,
         "output_summary": output_summary,
     }).execute()
-    print(
-        "[DB] create_task "
-        f"id={task_id} user_id={user_id} project_id={project_id} "
-        f"intent_type={intent_type!r} desc={description!r}"
-    )
+    logger.debug("create_task id=%s user_id=%s project_id=%s", task_id, user_id, project_id)
     return task_id
 
 
@@ -143,9 +277,9 @@ def log_agent_event_task(
 
     if not project_id:
         project_id = create_project(user_id, "General")
-        print(f"[DB] log_agent_event_task fallback_project='General' project_id={project_id} user_id={user_id}")
+        logger.debug("log_agent_event_task fallback project_id=%s user_id=%s", project_id, user_id)
     else:
-        print(f"[DB] log_agent_event_task resolved_project_id={project_id} user_id={user_id} project_name={project_name!r}")
+        logger.debug("log_agent_event_task resolved project_id=%s user_id=%s", project_id, user_id)
 
     touch_project(project_id)
     tid = create_task(
@@ -158,7 +292,7 @@ def log_agent_event_task(
         intent_confidence=intent_confidence,
         output_summary=output_summary,
     )
-    print(f"[DB] log_agent_event_task wrote task_id={tid}")
+    logger.debug("log_agent_event_task task_id=%s", tid)
     return tid
 
 
@@ -166,7 +300,7 @@ def get_user_tasks(user_id: str):
     sb = get_sb()
     res = sb.table("tasks").select("*, projects(name)").eq("user_id", user_id).order("created_at", desc=True).execute()
     raw_rows = res.data or []
-    # Flatten: {projects: {name: "foo"}} → {project_name: "foo"} (immutable reconstruction)
+    # Flatten: {projects: {name: "foo"}} -> {project_name: "foo"} (immutable reconstruction)
     result = []
     for row in raw_rows:
         proj = row.get("projects")
@@ -174,7 +308,7 @@ def get_user_tasks(user_id: str):
             **{k: v for k, v in row.items() if k != "projects"},
             "project_name": proj.get("name") if proj else None,
         })
-    print(f"[DB] get_user_tasks user_id={user_id} count={len(result)}")
+    logger.debug("get_user_tasks user_id=%s count=%s", user_id, len(result))
     return result
 
 
@@ -204,6 +338,16 @@ def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> 
 
 
 # ==================== CALL SESSIONS ====================
+
+def get_user_id_by_phone(phone_number: str) -> str | None:
+    """Look up a user by their phone number."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id FROM users WHERE phone_number = ?",
+        (phone_number,)
+    ).fetchone()
+    conn.close()
+    return row["id"] if row else None
 
 def create_call_session(user_id, phone_number):
     sb = get_sb()
@@ -252,7 +396,7 @@ def create_agent_execution(
         "refined_prompt": refined_prompt,
         "status": status,
     }).execute()
-    print(f"[DB] create_agent_execution id={exec_id} task_id={task_id} stage={stage}")
+    logger.debug("create_agent_execution id=%s task_id=%s stage=%s", exec_id, task_id, stage)
     return exec_id
 
 
@@ -278,7 +422,7 @@ def update_agent_execution(
     if terminal_command_id is not None:
         data["terminal_command_id"] = terminal_command_id
     sb.table("agent_executions").update(data).eq("id", exec_id).execute()
-    print(f"[DB] update_agent_execution id={exec_id} status={status}")
+    logger.debug("update_agent_execution id=%s status=%s", exec_id, status)
 
 
 def store_agent_feedback(
@@ -299,7 +443,7 @@ def store_agent_feedback(
         "status": status,
         "completed_at": _now_iso(),
     }).execute()
-    print(f"[DB] store_agent_feedback task_id={task_id} status={status}")
+    logger.debug("store_agent_feedback task_id=%s status=%s", task_id, status)
 
 
 def get_agent_executions(task_id: str) -> list:
@@ -488,14 +632,28 @@ def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list
     return res.data or []
 
 
-def create_terminal_command(*, session_id: str, user_id: str, command: str) -> str:
+def create_terminal_command(
+    *,
+    session_id: str,
+    user_id: str,
+    command: str,
+    source: str = "typed",
+    provider: str = "shell",
+    user_prompt: str | None = None,
+    normalized_command: str | None = None,
+) -> str:
     sb = get_sb()
     command_id = str(uuid.uuid4())
+    normalized = normalized_command or command
     sb.table("terminal_commands").insert({
         "id": command_id,
         "session_id": session_id,
         "user_id": user_id,
         "command": command,
+        "source": source,
+        "provider": provider,
+        "user_prompt": user_prompt,
+        "normalized_command": normalized,
         "status": "queued",
     }).execute()
     # Update session timestamp (non-transactional, cosmetic)
@@ -521,6 +679,74 @@ def get_terminal_command(command_id: str) -> dict | None:
     sb = get_sb()
     res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
     return res.data if res else None
+
+
+def get_or_create_terminal_session_for_project(
+    *,
+    user_id: str,
+    project_id: str,
+    name: str = "Unified Session",
+    within_seconds: int = 180,
+) -> dict:
+    active = get_active_instances_for_project(project_id, within_seconds=within_seconds)
+    instance_id = active[0]["id"] if active else None
+
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM terminal_sessions
+        WHERE user_id = ? AND project_id = ? AND name = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (user_id, project_id, name),
+    ).fetchone()
+    conn.close()
+
+    if row:
+        session = dict(row)
+        if not session.get("instance_id") and instance_id:
+            bind_terminal_session_instance(session["id"], instance_id)
+            refreshed = get_terminal_session(session["id"])
+            return refreshed or session
+        return session
+
+    session_id = create_terminal_session(
+        user_id=user_id,
+        project_id=project_id,
+        name=name,
+        instance_id=instance_id,
+        status="pending",
+    )
+    created = get_terminal_session(session_id)
+    return created or {"id": session_id, "project_id": project_id, "user_id": user_id}
+
+
+def list_recent_terminal_commands_for_user(
+    *,
+    user_id: str,
+    limit: int = 100,
+) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            tc.*,
+            ts.project_id,
+            ts.name AS session_name,
+            p.name AS project_name
+        FROM terminal_commands tc
+        JOIN terminal_sessions ts ON ts.id = tc.session_id
+        LEFT JOIN projects p ON p.id = ts.project_id
+        WHERE tc.user_id = ?
+        ORDER BY tc.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
@@ -574,6 +800,46 @@ def get_terminal_logs_for_command(
         query = query.gt("sequence", after_sequence)
     res = query.order("sequence").limit(limit).execute()
     return res.data or []
+
+
+def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
+    """
+    Claim the oldest queued command where command session project is linked to device.
+    Returns the command dict with project_id and local_path attached.
+    """
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT tc.*, ts.project_id, dpl.local_path AS project_local_path
+            FROM terminal_commands tc
+            JOIN terminal_sessions ts ON ts.id = tc.session_id
+            JOIN device_project_links dpl ON dpl.project_id = ts.project_id
+            WHERE dpl.device_id = ?
+              AND tc.status = 'queued'
+            ORDER BY tc.created_at ASC
+            LIMIT 1
+            """,
+            (device_id,),
+        ).fetchone()
+        if not row:
+            return None
+        command_id = row["id"]
+        res = conn.execute(
+            """
+            UPDATE terminal_commands
+            SET status = 'running', started_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'queued'
+            """,
+            (command_id,),
+        )
+        if res.rowcount != 1:
+            conn.commit()
+            return None
+        conn.commit()
+        return dict(row)
+    finally:
+        conn.close()
 
 
 # ==================== AGENT TOKENS (Local Agent Pairing) ====================
@@ -634,9 +900,256 @@ def get_user_id_for_agent_token(token: str) -> str | None:
     return user_id
 
 
+def _hash_device_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_device_pairing(*, user_id: str, name: str | None, platform: str | None, expires_minutes: int = 10) -> dict:
+    conn = get_db_connection()
+    device_id = str(uuid.uuid4())
+    pairing_code = secrets.token_urlsafe(8)
+    expires_at = (datetime.utcnow() + timedelta(minutes=expires_minutes)).isoformat()
+    conn.execute(
+        """
+        INSERT INTO companion_devices
+            (id, user_id, name, platform, status, pairing_code, pairing_expires_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (device_id, user_id, name, platform, pairing_code, expires_at),
+    )
+    conn.commit()
+    conn.close()
+    return {"device_id": device_id, "pairing_code": pairing_code, "expires_at": expires_at}
+
+
+def complete_device_pairing(*, pairing_code: str, device_name: str | None = None, platform: str | None = None) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM companion_devices
+        WHERE pairing_code = ?
+          AND status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (pairing_code,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    device = dict(row)
+    expires_at = device.get("pairing_expires_at")
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
+        conn.close()
+        return None
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_device_token(token)
+    conn.execute(
+        """
+        UPDATE companion_devices
+        SET name = COALESCE(?, name),
+            platform = COALESCE(?, platform),
+            status = 'online',
+            pairing_code = NULL,
+            pairing_expires_at = NULL,
+            device_token_hash = ?,
+            last_heartbeat = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (device_name, platform, token_hash, device["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return {"device_id": device["id"], "user_id": device["user_id"], "device_token": token}
+
+
+def get_device_by_token(device_token: str) -> dict | None:
+    token_hash = _hash_device_token(device_token)
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM companion_devices
+        WHERE device_token_hash = ?
+        LIMIT 1
+        """,
+        (token_hash,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def touch_device_heartbeat(device_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE companion_devices SET status = 'online', last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?",
+        (device_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_devices_for_user(user_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT id, user_id, name, platform, status, last_heartbeat, created_at
+        FROM companion_devices
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def link_device_project(*, device_id: str, project_id: str, local_path: str | None = None) -> dict:
+    conn = get_db_connection()
+    existing = conn.execute(
+        """
+        SELECT *
+        FROM device_project_links
+        WHERE device_id = ? AND project_id = ?
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+    if existing:
+        row = dict(existing)
+        if local_path and row.get("local_path") != local_path:
+            conn.execute(
+                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
+                (local_path, row["id"]),
+            )
+            conn.commit()
+            row["local_path"] = local_path
+        conn.close()
+        return row
+    link_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO device_project_links (id, device_id, project_id, local_path)
+        VALUES (?, ?, ?, ?)
+        """,
+        (link_id, device_id, project_id, local_path),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": link_id, "device_id": device_id, "project_id": project_id, "local_path": local_path}
+
+
+def _link_device_project_local_path_if_missing(*, device_id: str, project_id: str, local_path: str) -> None:
+    """
+    Set device_project_links.local_path to `local_path` only when it's currently empty/missing.
+    This avoids overwriting user-customized local paths.
+    """
+    conn = get_db_connection()
+    existing = conn.execute(
+        """
+        SELECT id, local_path
+        FROM device_project_links
+        WHERE device_id = ? AND project_id = ?
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+
+    if existing:
+        row = dict(existing)
+        if not row.get("local_path"):
+            conn.execute(
+                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
+                (local_path, row["id"]),
+            )
+            conn.commit()
+        conn.close()
+        return
+
+    link_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO device_project_links (id, device_id, project_id, local_path)
+        VALUES (?, ?, ?, ?)
+        """,
+        (link_id, device_id, project_id, local_path),
+    )
+    conn.commit()
+    conn.close()
+
+
+def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, project_id: str, local_path: str) -> None:
+    devices = list_devices_for_user(user_id)
+    for d in devices:
+        _link_device_project_local_path_if_missing(
+            device_id=d["id"],
+            project_id=project_id,
+            local_path=local_path,
+        )
+
+
+def get_device_project_links(device_id: str) -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT dpl.*, p.name AS project_name
+        FROM device_project_links dpl
+        LEFT JOIN projects p ON p.id = dpl.project_id
+        WHERE dpl.device_id = ?
+        ORDER BY dpl.created_at DESC
+        """,
+        (device_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_cursor_context(
+    *,
+    device_id: str,
+    project_id: str,
+    file_path: str | None,
+    selection: str | None,
+    diagnostics: str | None,
+) -> str:
+    conn = get_db_connection()
+    context_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO cursor_context_snapshots (id, device_id, project_id, file_path, selection, diagnostics)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (context_id, device_id, project_id, file_path, selection, diagnostics),
+    )
+    conn.commit()
+    conn.close()
+    return context_id
+
+
+def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM cursor_context_snapshots
+        WHERE device_id = ? AND project_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 # ==================== USER DATA DELETION ====================
 
 def delete_user_history(user_id: str) -> dict:
+    """
+    Deletes user-owned activity data (not the Supabase account).
+    Returns counts for confirmation UI.
+    """
     sb = get_sb()
     res = sb.rpc("delete_user_history", {"p_user_id": user_id}).execute()
     return res.data if res.data else {}

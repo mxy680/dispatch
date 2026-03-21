@@ -1,0 +1,50 @@
+{
+  "name": "dispatch-cursor-extension",
+  "displayName": "Dispatch Cursor Bridge",
+  "description": "Sends editor context to Dispatch Companion localhost bridge.",
+  "version": "0.1.0",
+  "publisher": "dispatch",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:dispatch.sendContext"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dispatch.sendContext",
+        "title": "Dispatch: Send Context To Companion"
+      }
+    ],
+    "configuration": {
+      "title": "Dispatch",
+      "properties": {
+        "dispatch.projectId": {
+          "type": "string",
+          "default": "",
+          "description": "Dispatch backend project ID mapped to this workspace."
+        },
+        "dispatch.localBridgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:43111",
+          "description": "Dispatch Companion localhost bridge URL."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.47",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.9.3"
+  }
+}
+

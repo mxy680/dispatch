@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { getAuthHeader } from "@/lib/supabase/access-token";
+import { authFetch } from "@/lib/supabase/access-token";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,11 +13,18 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 
+type DeleteHistoryResult = Record<string, number>;
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export function SettingsDangerZone() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [loading, setLoading] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const [result, setResult] = useState<any | null>(null);
+  const [result, setResult] = useState<DeleteHistoryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const deleteHistory = async () => {
@@ -25,17 +32,13 @@ export function SettingsDangerZone() {
     setErr(null);
     setResult(null);
     try {
-      const auth = await getAuthHeader();
-      if (!auth) {
-        throw new Error("Please sign in again.");
-      }
-      const res = await fetch(`${backendUrl}/api/settings/history`, { method: "DELETE", headers: { ...auth } });
+      const res = await authFetch(`${backendUrl}/api/settings/history`, { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? "Failed to delete history");
       setResult(data.deleted ?? {});
       setConfirm(false);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to delete history");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to delete history"));
     } finally {
       setLoading(false);
     }

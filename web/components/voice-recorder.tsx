@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { authFetch, getAuthHeader } from "@/lib/supabase/access-token";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,7 @@ const TEST_PROMPTS = [
 ];
 
 export function VoiceRecorder() {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
   const [testInput, setTestInput] = useState("");
@@ -42,29 +44,26 @@ export function VoiceRecorder() {
 
   // Response State
   const [transcript, setTranscript] = useState<string | null>(null);
-  const [intent, setIntent] = useState<any | null>(null);
+  const [intent, setIntent] = useState<Record<string, unknown> | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<string | null>(null);
 
   // Agent Pipeline State
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [agentStages, setAgentStages] = useState<AgentStage[]>([]);
-  const [agentExecutions, setAgentExecutions] = useState<AgentExecution[]>([]);
   const [pollingTaskId, setPollingTaskId] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const router = useRouter();
-  const supabase = createClient();
 
   // Poll for agent status updates
   const pollAgentStatus = useCallback(async (taskId: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/agent/status/${taskId}`);
+      const res = await authFetch(`${backendUrl}/api/agent/status/${taskId}`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.executions) {
-        setAgentExecutions(data.executions);
         // Derive stages from executions
         const stages: AgentStage[] = data.executions.map((ex: AgentExecution) => ({
           stage: ex.stage,
@@ -86,7 +85,7 @@ export function VoiceRecorder() {
     } catch {
       // silently retry
     }
-  }, []);
+  }, [backendUrl]);
 
   useEffect(() => {
     if (!pollingTaskId) return;
@@ -102,7 +101,6 @@ export function VoiceRecorder() {
       setDebugInfo(null);
       setAgentStatus(null);
       setAgentStages([]);
-      setAgentExecutions([]);
       setPollingTaskId(null);
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -136,12 +134,9 @@ export function VoiceRecorder() {
 
   const handleUpload = async (audioBlob: Blob) => {
     setLoading(true);
-
-    const { data, error } = await supabase.auth.refreshSession();
-    const session = data.session;
-    if (!session || error) {
-      console.error("Auth Error:", error);
-      alert("Session expired. Please log in again.");
+    const auth = await getAuthHeader();
+    if (!auth) {
+      alert("Session unavailable. Please sign in again.");
       setLoading(false);
       return;
     }
@@ -154,7 +149,7 @@ export function VoiceRecorder() {
       const response = await fetch(`${backendUrl}/transcribe`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          ...auth,
         },
         body: formData,
       });
@@ -200,14 +195,14 @@ export function VoiceRecorder() {
     setDebugInfo(null);
     setAgentStatus(null);
     setAgentStages([]);
-    setAgentExecutions([]);
     setPollingTaskId(null);
 
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
     try {
+      const auth = await getAuthHeader();
       const response = await fetch(`${backendUrl}/transcribe-text`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...auth },
         body: JSON.stringify({ text }),
       });
 
@@ -266,7 +261,7 @@ export function VoiceRecorder() {
     switch (stage) {
       case "refine": return "Prompt Refiner";
       case "dispatch": return "Task Dispatch";
-      case "execute": return "Copilot Agent";
+      case "execute": return "Agent Executor";
       case "terminal": return "Terminal Execution";
       case "complete": return "Complete";
       default: return stage;
@@ -394,9 +389,9 @@ export function VoiceRecorder() {
               <div className="space-y-2 animate-fade-in-up" style={{ animationDelay: "0.15s" }}>
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Detected Intent (Bedrock)</p>
                 <div className="bg-black/30 p-3 rounded-md font-mono text-sm text-blue-300 border-l-2 border-blue-500">
-                  <p>Type: <span className="text-white">{intent.intent}</span></p>
-                  {intent.project_name && <p>Project: <span className="text-white">{intent.project_name}</span></p>}
-                  {intent.task_description && <p>Task: <span className="text-white">{intent.task_description}</span></p>}
+                  <p>Type: <span className="text-white">{intent.intent as string}</span></p>
+                  {!!intent.project_name && <p>Project: <span className="text-white">{String(intent.project_name)}</span></p>}
+                  {!!intent.task_description && <p>Task: <span className="text-white">{String(intent.task_description)}</span></p>}
                 </div>
               </div>
             )}
@@ -508,10 +503,7 @@ export function VoiceRecorder() {
                     ) : (
                       <>
                         <p className="text-xs font-mono text-gray-500">
-                          📁 Task dispatched to <span className="text-gray-400">~/Desktop/agent-workspace/tasks/</span>
-                        </p>
-                        <p className="text-xs font-mono text-gray-600 mt-1">
-                          Open the workspace in VS Code and use Copilot Chat to execute the task.
+                          Task dispatched. Check the Unified Command Center timeline for output.
                         </p>
                       </>
                     )}

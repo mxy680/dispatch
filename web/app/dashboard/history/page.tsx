@@ -16,12 +16,16 @@ export default async function HistoryPage() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
   if (!user) redirect("/login");
 
   const backendUrl = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const res = await fetch(`${backendUrl}/api/call-sessions/${user.id}`, {
     cache: "no-store",
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
   });
   const json = (await res.json()) as { sessions: CallSession[] };
   const sessions = json.sessions ?? [];

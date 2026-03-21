@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { authFetch } from "@/lib/supabase/access-token";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -20,12 +21,19 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
   const [animating, setAnimating] = useState(false);
 
   useEffect(() => {
-    fetch(`${backendUrl}/api/agent/terminal-access/${userId}`)
-      .then((r) => r.json())
-      .then((d) => setGranted(d.terminal_access ?? false))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [userId]);
+    const load = async () => {
+      try {
+        const res = await authFetch(`${backendUrl}/api/agent/terminal-access/${userId}`);
+        const d = await res.json();
+        setGranted(d.terminal_access ?? false);
+      } catch {
+        // silently fail
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [backendUrl, userId]);
 
   const handleToggle = async () => {
     if (!granted) {
@@ -41,9 +49,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
     setShowConfirm(false);
     setAnimating(true);
     try {
-      const res = await fetch(`${backendUrl}/api/agent/terminal-access/${userId}`, {
-        method: "POST",
-      });
+      const res = await authFetch(`${backendUrl}/api/agent/terminal-access/${userId}`, { method: "POST" });
       if (res.ok) setGranted(true);
     } catch {
       // silently fail
@@ -55,9 +61,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
   const doRevoke = async () => {
     setAnimating(true);
     try {
-      const res = await fetch(`${backendUrl}/api/agent/terminal-access/${userId}`, {
-        method: "DELETE",
-      });
+      const res = await authFetch(`${backendUrl}/api/agent/terminal-access/${userId}`, { method: "DELETE" });
       if (res.ok) setGranted(false);
     } catch {
       // silently fail
@@ -149,7 +153,7 @@ export function TerminalAccessToggle({ userId }: { userId: string }) {
                       <span className="text-supabase-green">✓</span> Open VS Code on agent workspace automatically
                     </li>
                     <li className="flex items-center gap-2">
-                      <span className="text-supabase-green">✓</span> Run GitHub Copilot CLI suggestions in terminal
+                      <span className="text-supabase-green">✓</span> Run Cursor / Claude CLI commands in terminal
                     </li>
                     <li className="flex items-center gap-2">
                       <span className="text-supabase-green">✓</span> Auto-generate and execute shell scripts

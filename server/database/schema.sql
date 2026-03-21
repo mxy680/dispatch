@@ -92,6 +92,10 @@ CREATE TABLE IF NOT EXISTS terminal_commands (
     session_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     command TEXT NOT NULL,
+    source TEXT DEFAULT 'typed', -- 'voice' | 'typed' | 'system'
+    provider TEXT DEFAULT 'shell', -- 'cursor' | 'claude' | 'shell'
+    user_prompt TEXT,
+    normalized_command TEXT,
     status TEXT DEFAULT 'queued',  -- 'queued', 'running', 'completed', 'failed', 'cancelled'
     exit_code INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -130,10 +134,52 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     user_id TEXT PRIMARY KEY,
     phone_number TEXT,
     default_project TEXT,
+    default_provider TEXT DEFAULT 'cursor',
+    project_base_path TEXT, -- absolute folder where new projects should live on the user's machine
+    terminal_access_granted INTEGER DEFAULT 0,
     voice_speed TEXT DEFAULT 'normal',
     email_notifications INTEGER DEFAULT 1,
     sms_notifications INTEGER DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 6a. COMPANION DEVICES (desktop companion registrations)
+CREATE TABLE IF NOT EXISTS companion_devices (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT,
+    platform TEXT,
+    status TEXT DEFAULT 'pending', -- 'pending' | 'online' | 'offline'
+    pairing_code TEXT,
+    pairing_expires_at TIMESTAMP,
+    device_token_hash TEXT,
+    last_heartbeat TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 6b. DEVICE -> PROJECT LINKS
+CREATE TABLE IF NOT EXISTS device_project_links (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    local_path TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (device_id) REFERENCES companion_devices(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- 6c. CURSOR CONTEXT SNAPSHOTS (from local extension)
+CREATE TABLE IF NOT EXISTS cursor_context_snapshots (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    file_path TEXT,
+    selection TEXT,
+    diagnostics TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (device_id) REFERENCES companion_devices(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
 CREATE TABLE IF NOT EXISTS intents (
@@ -155,12 +201,12 @@ CREATE TABLE IF NOT EXISTS call_messages_log (
     FOREIGN KEY (call_session_id) REFERENCES call_sessions(id)
 );
 
--- 8. AGENT EXECUTIONS TABLE (tracks prompt refiner + copilot agent pipeline)
+-- 8. AGENT EXECUTIONS TABLE (tracks prompt refiner + dispatcher pipeline)
 CREATE TABLE IF NOT EXISTS agent_executions (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     stage TEXT NOT NULL,          -- 'refine', 'dispatch', 'execute', 'complete'
-    agent_type TEXT NOT NULL,     -- 'prompt_refiner', 'copilot_agent'
+    agent_type TEXT NOT NULL,     -- 'prompt_refiner', 'dispatcher', 'local_agent'
     input_prompt TEXT,
     refined_prompt TEXT,
     output_result TEXT,
@@ -185,3 +231,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_created ON agent_tokens(user_id
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_companion_devices_user_created ON companion_devices(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_device_project_links_device_project ON device_project_links(device_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_cursor_context_device_project_created ON cursor_context_snapshots(device_id, project_id, created_at);
