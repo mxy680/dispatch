@@ -287,8 +287,8 @@ export function UnifiedCommandCenter({
             />
             <button
               onClick={submit}
-              disabled={submitting || !input.trim()}
-              className="px-4 text-sm font-mono text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
+              disabled={submitting || !input.trim() || !selectedProjectId}
+              className="px-4 py-2 text-sm font-mono font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors mr-1"
             >
               {submitting ? "..." : "Run"}
             </button>
