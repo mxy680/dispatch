@@ -2,6 +2,7 @@ import { DashboardPoller } from "@/components/dashboard-poller";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -25,6 +26,34 @@ type ProjectRow = {
   completed_tasks: number | null;
 };
 
+type TaskRow = {
+  id: string;
+  project_id: string;
+  project_name?: string | null;
+  description: string;
+  status: string;
+  created_at: string;
+  intent_type?: string | null;
+};
+
+function statusBadge(status: string) {
+  const styles: Record<string, string> = {
+    completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    agent_completed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    in_progress: "bg-blue-500/15 text-blue-400 border-blue-500/20",
+    pending: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  };
+  return styles[status] ?? "bg-muted text-muted-foreground";
+}
+
+function timeAgo(iso: string) {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
   const {
@@ -41,9 +70,10 @@ export default async function DashboardPage() {
     cache: "no-store",
     headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
   });
-  const dashJson = (await dashRes.json()) as { projects: ProjectRow[] };
+  const dashJson = (await dashRes.json()) as { projects: ProjectRow[]; tasks: TaskRow[] };
 
   const projects = dashJson.projects ?? [];
+  const tasks = dashJson.tasks ?? [];
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -58,8 +88,9 @@ export default async function DashboardPage() {
       {/* Command Center */}
       <UnifiedCommandCenter projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
 
-      {/* Projects */}
-      <div>
+      {/* Projects + Tasks side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Projects */}
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -96,6 +127,44 @@ export default async function DashboardPage() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Recent Tasks */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium">Recent Tasks</CardTitle>
+              <span className="text-xs text-muted-foreground tabular-nums">{tasks.length}</span>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {tasks.length === 0 ? (
+              <p className="px-6 py-8 text-sm text-muted-foreground text-center">
+                No tasks yet. Send a command above.
+              </p>
+            ) : (
+              <div className="divide-y divide-border max-h-[300px] overflow-auto">
+                {tasks.slice(0, 20).map((t) => (
+                  <div key={t.id} className="px-4 py-2.5 flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm truncate">{t.description}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {t.project_name ?? "Unknown project"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="outline" className={`text-[10px] border ${statusBadge(t.status)}`}>
+                        {t.status}
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                        {timeAgo(t.created_at)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
