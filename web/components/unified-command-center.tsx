@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { authFetch, getAuthHeader } from "@/lib/supabase/access-token";
+import { authFetch } from "@/lib/supabase/access-token";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 
 type ProjectOption = { id: string; name: string };
 
@@ -26,26 +28,44 @@ type TerminalLog = {
   chunk: string;
 };
 
-function getErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
+type CommandMode = "shell" | "agent";
+
+function statusColor(status: string) {
+  if (status === "completed") return "text-emerald-400";
+  if (status === "running") return "text-blue-400";
+  if (status === "queued") return "text-amber-400";
+  if (status === "failed" || status === "cancelled") return "text-red-400";
+  return "text-gray-400";
+}
+
+function statusDot(status: string) {
+  if (status === "completed") return "bg-emerald-400";
+  if (status === "running") return "bg-blue-400 animate-pulse";
+  if (status === "queued") return "bg-amber-400";
+  if (status === "failed" || status === "cancelled") return "bg-red-400";
+  return "bg-gray-400";
+}
+
+function timeAgo(iso: string) {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 export function UnifiedCommandCenter({
   projects,
-  initialProvider = "cursor",
 }: {
   projects: ProjectOption[];
-  initialProvider?: "cursor" | "claude";
+  initialProvider?: string;
 }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? "");
-  const [provider, setProvider] = useState<"cursor" | "claude">(initialProvider);
-  const [prompt, setPrompt] = useState("");
-  const [bashCommand, setBashCommand] = useState("");
+  const [agentProvider, setAgentProvider] = useState<"cursor" | "claude">("claude");
+  const [mode, setMode] = useState<CommandMode>("shell");
+  const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [voiceBusy, setVoiceBusy] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,63 +73,34 @@ export function UnifiedCommandCenter({
   const [activeCommandId, setActiveCommandId] = useState<string>("");
   const [logs, setLogs] = useState<TerminalLog[]>([]);
 
-  const [timelineFilter, setTimelineFilter] = useState<"all" | "agentic" | "terminal">("all");
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-
-  const filteredCommands = useMemo(() => {
-    if (timelineFilter === "all") return commands;
-    if (timelineFilter === "terminal") {
-      return commands.filter((c) => (c.provider || "").toLowerCase() === "shell");
-    }
-    // agentic
-    return commands.filter((c) => (c.provider || "").toLowerCase() !== "shell");
-  }, [commands, timelineFilter]);
-
-  const filteredActiveCommand = useMemo(
-    () => filteredCommands.find((c) => c.id === activeCommandId) ?? null,
-    [filteredCommands, activeCommandId]
+  const activeCommand = useMemo(
+    () => commands.find((c) => c.id === activeCommandId) ?? null,
+    [commands, activeCommandId]
   );
 
-  const activeCommandIsDone = useMemo(() => {
-    if (!filteredActiveCommand) return false;
-    return ["completed", "failed", "cancelled"].includes(filteredActiveCommand.status);
-  }, [filteredActiveCommand]);
+  const activeIsDone = useMemo(() => {
+    if (!activeCommand) return false;
+    return ["completed", "failed", "cancelled"].includes(activeCommand.status);
+  }, [activeCommand]);
 
+  // Load saved provider preference
   useEffect(() => {
-    const activeStillVisible =
-      activeCommandId && filteredCommands.some((c) => c.id === activeCommandId);
-    if (activeStillVisible) return;
-    if (filteredCommands[0]?.id) setActiveCommandId(filteredCommands[0].id);
-  }, [filteredCommands, activeCommandId]);
-
-  const loadProvider = useCallback(async () => {
-    try {
-      const res = await authFetch(`${backendUrl}/api/settings/provider`, { cache: "no-store" });
-      if (!res.ok) return;
-      const json = await res.json();
-      if (json?.provider === "cursor" || json?.provider === "claude") setProvider(json.provider);
-    } catch { /* silent */ }
-  }, [backendUrl]);
-
-  const saveProvider = useCallback(
-    async (nextProvider: string) => {
+    (async () => {
       try {
-        await authFetch(`${backendUrl}/api/settings/provider`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: nextProvider }),
-        });
+        const res = await authFetch(`${backendUrl}/api/settings/provider`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json?.provider === "cursor" || json?.provider === "claude") setAgentProvider(json.provider);
       } catch { /* silent */ }
-    },
-    [backendUrl]
-  );
+    })();
+  }, [backendUrl]);
 
   const refreshTimeline = useCallback(async () => {
     try {
-      const params = new URLSearchParams();
-      params.set("limit", "100");
+      const params = new URLSearchParams({ limit: "50" });
       if (selectedProjectId) params.set("project_id", selectedProjectId);
       const res = await authFetch(`${backendUrl}/api/unified/timeline?${params}`, { cache: "no-store" });
       if (!res.ok) return;
@@ -117,7 +108,7 @@ export function UnifiedCommandCenter({
       const next = (data.commands ?? []) as TimelineCommand[];
       setCommands(next);
       if (!activeCommandId && next[0]?.id) setActiveCommandId(next[0].id);
-    } catch { /* silent on polling */ }
+    } catch { /* silent */ }
   }, [activeCommandId, backendUrl, selectedProjectId]);
 
   const refreshLogs = useCallback(async () => {
@@ -130,10 +121,7 @@ export function UnifiedCommandCenter({
     } catch { /* silent */ }
   }, [activeCommandId, backendUrl]);
 
-  useEffect(() => {
-    loadProvider();
-  }, [loadProvider]);
-
+  // Poll timeline
   useEffect(() => {
     refreshTimeline();
     const interval = setInterval(() => {
@@ -143,310 +131,236 @@ export function UnifiedCommandCenter({
     return () => clearInterval(interval);
   }, [refreshTimeline]);
 
+  // Load logs when active command changes
   useEffect(() => {
     setLogs([]);
     if (!activeCommandId) return;
     refreshLogs();
   }, [activeCommandId, refreshLogs]);
 
+  // Poll logs while command is running
   useEffect(() => {
-    if (!filteredActiveCommand) return;
-    const done = ["completed", "failed", "cancelled"].includes(filteredActiveCommand.status);
-    if (done) return;
-    const interval = setInterval(refreshLogs, 2500);
+    if (!activeCommand) return;
+    if (["completed", "failed", "cancelled"].includes(activeCommand.status)) return;
+    const interval = setInterval(refreshLogs, 1500);
     return () => clearInterval(interval);
-  }, [filteredActiveCommand, refreshLogs]);
+  }, [activeCommand, refreshLogs]);
 
-  const submitTyped = async () => {
-    if (!selectedProjectId || !prompt.trim()) return;
+  // Auto-scroll logs
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
+  // Auto-select first command when active is removed
+  useEffect(() => {
+    if (activeCommandId && commands.some((c) => c.id === activeCommandId)) return;
+    if (commands[0]?.id) setActiveCommandId(commands[0].id);
+  }, [commands, activeCommandId]);
+
+  const submit = async () => {
+    if (!selectedProjectId || !input.trim()) return;
     setSubmitting(true);
     setMessage(null);
     setError(null);
     try {
+      const provider = mode === "shell" ? "shell" : agentProvider;
       const res = await authFetch(`${backendUrl}/api/unified/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id: selectedProjectId,
-          prompt,
+          prompt: input,
           source: "typed",
           provider,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.detail ?? "Failed to queue command");
-      setPrompt("");
-      setMessage(`Queued via ${json.provider}`);
+      setInput("");
+      setMessage(mode === "shell" ? "Command sent" : `Sent to ${provider}`);
       await refreshTimeline();
       if (json.command_id) setActiveCommandId(json.command_id);
+      setTimeout(() => setMessage(null), 3000);
     } catch (e: unknown) {
-      setError(getErrorMessage(e, "Failed to queue command"));
+      setError(e instanceof Error ? e.message : "Failed to send command");
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const submitManualBash = async () => {
-    if (!selectedProjectId || !bashCommand.trim()) return;
-    setSubmitting(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const res = await authFetch(`${backendUrl}/api/unified/commands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_id: selectedProjectId,
-          prompt: bashCommand,
-          source: "typed",
-          provider: "shell",
-          session_name: "Manual Bash Terminal",
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.detail ?? "Failed to queue bash command");
-      setBashCommand("");
-      setMessage("Queued manual bash command");
-      await refreshTimeline();
-      if (json.command_id) setActiveCommandId(json.command_id);
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, "Failed to queue bash command"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const startRecording = async () => {
-    setMessage(null);
-    setError(null);
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
-    recorderRef.current = recorder;
-    chunksRef.current = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunksRef.current.push(event.data);
-    };
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      await submitVoice();
-    };
-    recorder.start();
-    setIsRecording(true);
-  };
-
-  const stopRecording = () => {
-    recorderRef.current?.stop();
-    setIsRecording(false);
-  };
-
-  const submitVoice = async () => {
-    setVoiceBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const auth = await getAuthHeader(true);
-      if (!auth) throw new Error("No auth token. Please sign in again.");
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-      const formData = new FormData();
-      formData.append("file", blob, "voice.webm");
-      const res = await fetch(`${backendUrl}/transcribe`, {
-        method: "POST",
-        headers: { ...auth },
-        body: formData,
-      });
-      const json = await res.json();
-      if (!res.ok || json.status !== "success") {
-        throw new Error(json?.message ?? "Voice command failed");
-      }
-      setMessage(json.action_result ?? "Voice command accepted.");
-      await refreshTimeline();
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, "Voice command failed"));
-    } finally {
-      setVoiceBusy(false);
+      inputRef.current?.focus();
     }
   };
 
   return (
-    <section className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-      <div className="bg-black/40 px-4 py-2 border-b border-white/5">
-        <span className="text-xs font-mono text-gray-500">UNIFIED COMMAND CENTER</span>
-      </div>
-      <div className="p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <select
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="text-sm font-mono bg-black/30 border border-white/10 rounded px-2 py-2 text-gray-200"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={provider}
-            onChange={(e) => {
-              const next = e.target.value as "cursor" | "claude";
-              setProvider(next);
-              saveProvider(next);
-            }}
-            className="text-sm font-mono bg-black/30 border border-white/10 rounded px-2 py-2 text-gray-200"
-          >
-            <option value="cursor">Cursor</option>
-            <option value="claude">Claude</option>
-          </select>
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            disabled={voiceBusy}
-            className="text-sm font-mono px-3 py-2 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 disabled:opacity-50"
-          >
-            {isRecording ? "Stop recording" : voiceBusy ? "Processing voice..." : "Record voice"}
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitTyped();
-            }}
-            placeholder="Type what you want the coding agent to do"
-            className="flex-1 text-sm font-mono bg-black/30 border border-white/10 rounded px-3 py-2 text-gray-200 placeholder:text-gray-600"
-          />
-          <button
-            onClick={submitTyped}
-            disabled={submitting || !prompt.trim()}
-            className="text-sm font-mono px-3 py-2 rounded bg-supabase-green text-black hover:bg-supabase-green-dark disabled:opacity-50"
-          >
-            {submitting ? "Queueing..." : "Send"}
-          </button>
-        </div>
-
-        <div className="border border-white/10 rounded p-3 bg-black/20">
-          <div className="text-xs font-mono text-gray-400 mb-2">MANUAL BASH TERMINAL</div>
-          <div className="flex gap-2">
-            <input
-              value={bashCommand}
-              onChange={(e) => setBashCommand(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitManualBash();
-              }}
-              placeholder="Run a manual bash command (e.g. ls -la, pwd, git status)"
-              className="flex-1 text-sm font-mono bg-black/30 border border-white/10 rounded px-3 py-2 text-gray-200 placeholder:text-gray-600"
-            />
-            <button
-              onClick={submitManualBash}
-              disabled={submitting || !bashCommand.trim()}
-              className="text-sm font-mono px-3 py-2 rounded bg-white/10 text-gray-200 hover:bg-white/20 disabled:opacity-50"
-            >
-              Run Bash
-            </button>
-          </div>
-        </div>
-
-        {message && <div className="text-xs font-mono text-green-400">{message}</div>}
-        {error && <div className="text-xs font-mono text-red-400">{error}</div>}
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <div className="lg:col-span-1">
-            <div className="text-xs font-mono text-gray-500 mb-2">Timeline</div>
-            <div className="flex gap-2 mb-2">
+    <div className="space-y-3">
+      {/* Command Input */}
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          {/* Mode + Project selector bar */}
+          <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30">
+            <div className="flex rounded-md border border-border overflow-hidden mr-2">
               <button
-                className={`text-[11px] font-mono px-2 py-1 rounded border ${
-                  timelineFilter === "all"
-                    ? "border-supabase-green/30 bg-supabase-green/10 text-supabase-green"
-                    : "border-white/10 bg-black/20 text-gray-300 hover:bg-white/[0.03]"
+                onClick={() => setMode("shell")}
+                className={`px-3 py-1 text-xs font-mono transition-colors ${
+                  mode === "shell"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:text-foreground"
                 }`}
-                onClick={() => setTimelineFilter("all")}
               >
-                All ({commands.length})
+                Shell
               </button>
               <button
-                className={`text-[11px] font-mono px-2 py-1 rounded border ${
-                  timelineFilter === "agentic"
-                    ? "border-supabase-green/30 bg-supabase-green/10 text-supabase-green"
-                    : "border-white/10 bg-black/20 text-gray-300 hover:bg-white/[0.03]"
+                onClick={() => setMode("agent")}
+                className={`px-3 py-1 text-xs font-mono transition-colors ${
+                  mode === "agent"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:text-foreground"
                 }`}
-                onClick={() => setTimelineFilter("agentic")}
               >
-                Agentic ({commands.filter((c) => (c.provider || "").toLowerCase() !== "shell").length})
-              </button>
-              <button
-                className={`text-[11px] font-mono px-2 py-1 rounded border ${
-                  timelineFilter === "terminal"
-                    ? "border-supabase-green/30 bg-supabase-green/10 text-supabase-green"
-                    : "border-white/10 bg-black/20 text-gray-300 hover:bg-white/[0.03]"
-                }`}
-                onClick={() => setTimelineFilter("terminal")}
-              >
-                Terminal ({commands.filter((c) => (c.provider || "").toLowerCase() === "shell").length})
+                Agent
               </button>
             </div>
-            <div className="max-h-80 overflow-auto space-y-1 pr-1">
-              {filteredCommands.map((c) => (
+
+            <select
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="text-xs font-mono bg-background border border-border rounded px-2 py-1 text-foreground"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+
+            {mode === "agent" && (
+              <select
+                value={agentProvider}
+                onChange={(e) => {
+                  const next = e.target.value as "cursor" | "claude";
+                  setAgentProvider(next);
+                  authFetch(`${backendUrl}/api/settings/provider`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ provider: next }),
+                  }).catch(() => {});
+                }}
+                className="text-xs font-mono bg-background border border-border rounded px-2 py-1 text-foreground"
+              >
+                <option value="claude">Claude</option>
+                <option value="cursor">Cursor</option>
+              </select>
+            )}
+
+            <div className="flex-1" />
+
+            {message && <span className="text-xs font-mono text-emerald-400">{message}</span>}
+            {error && <span className="text-xs font-mono text-red-400">{error}</span>}
+          </div>
+
+          {/* Input */}
+          <div className="flex">
+            <span className="flex items-center px-3 text-sm font-mono text-muted-foreground select-none">
+              {mode === "shell" ? "$" : ">"}
+            </span>
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              placeholder={
+                mode === "shell"
+                  ? "ls -la, git status, npm test ..."
+                  : "Describe what you want the agent to do..."
+              }
+              className="flex-1 text-sm font-mono bg-transparent py-3 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+            />
+            <button
+              onClick={submit}
+              disabled={submitting || !input.trim()}
+              className="px-4 text-sm font-mono text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
+            >
+              {submitting ? "..." : "Run"}
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Timeline + Output */}
+      {commands.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-3">
+          {/* Timeline */}
+          <Card className="overflow-hidden">
+            <div className="px-3 py-2 border-b border-border">
+              <span className="text-xs font-medium text-muted-foreground">History</span>
+            </div>
+            <div className="max-h-[400px] overflow-auto">
+              {commands.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => setActiveCommandId(c.id)}
-                  className={`w-full text-left text-xs font-mono px-2 py-2 rounded border ${
+                  className={`w-full text-left px-3 py-2.5 border-b border-border last:border-0 transition-colors ${
                     c.id === activeCommandId
-                      ? "border-supabase-green/30 bg-supabase-green/10 text-supabase-green"
-                      : "border-white/10 bg-black/20 text-gray-300 hover:bg-white/[0.03]"
+                      ? "bg-accent"
+                      : "hover:bg-accent/50"
                   }`}
                 >
-                  <div className="truncate">{c.user_prompt || c.command}</div>
-                  <div className="text-[10px] text-gray-500">
-                    {(c.source || "typed").toUpperCase()} • {(c.provider || "shell").toUpperCase()} • {c.status}
-                    {c.exit_code !== undefined && c.exit_code !== null ? ` • exit ${c.exit_code}` : ""}
+                  <div className="flex items-center gap-2">
+                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(c.status)}`} />
+                    <span className="text-xs font-mono truncate text-foreground">
+                      {c.user_prompt || c.command}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 ml-3.5">
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                      {(c.provider || "shell")}
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground">{timeAgo(c.created_at)}</span>
+                    {c.exit_code !== undefined && c.exit_code !== null && (
+                      <span className={`text-[10px] ${c.exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        exit {c.exit_code}
+                      </span>
+                    )}
                   </div>
                 </button>
               ))}
-              {filteredCommands.length === 0 && (
-                <div className="text-xs font-mono text-gray-600 bg-black/20 border border-white/10 rounded p-3">
-                  No commands yet.
-                </div>
+            </div>
+          </Card>
+
+          {/* Output */}
+          <Card className="overflow-hidden">
+            <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">Output</span>
+              {activeCommand && (
+                <span className={`text-xs font-mono ${statusColor(activeCommand.status)}`}>
+                  {activeCommand.status}
+                </span>
               )}
             </div>
-          </div>
-
-          <div className="lg:col-span-2">
-            <div className="text-xs font-mono text-gray-500 mb-2">Output</div>
-            <div className="h-80 overflow-auto bg-black/30 border border-white/10 rounded p-3 font-mono text-xs whitespace-pre-wrap text-gray-200">
-              {filteredActiveCommand ? (
+            <div className="h-[400px] overflow-auto p-3 font-mono text-xs whitespace-pre-wrap text-foreground bg-black/20">
+              {activeCommand ? (
                 <>
-                  <div className="text-[11px] text-gray-500 mb-2">
-                    {filteredActiveCommand?.provider === "shell" ? "Terminal Output" : "Agentic Coding Output"}
-                  </div>
                   {logs.length > 0 ? (
-                  logs
-                    .slice()
-                    .sort((a, b) => a.sequence - b.sequence)
-                    .map((l) => {
-                      if (l.stream !== "stderr") return l.chunk;
-                      const failed =
-                        filteredActiveCommand?.status === "failed" || filteredActiveCommand?.status === "cancelled";
-                      return failed ? `[stderr] ${l.chunk}` : l.chunk;
-                    })
-                    .join("")
-                  ) : activeCommandIsDone ? (
-                    <span className="text-gray-600">
-                      {filteredActiveCommand?.status === "failed" || filteredActiveCommand?.status === "cancelled"
-                        ? "Command failed (no logs)."
-                        : "Command completed (no output)."}
+                    logs
+                      .slice()
+                      .sort((a, b) => a.sequence - b.sequence)
+                      .map((l, i) => (
+                        <span key={l.id ?? i} className={l.stream === "stderr" ? "text-red-400" : ""}>
+                          {l.chunk}
+                        </span>
+                      ))
+                  ) : activeIsDone ? (
+                    <span className="text-muted-foreground">
+                      {activeCommand.status === "failed" ? "Command failed with no output." : "Completed with no output."}
                     </span>
                   ) : (
-                    <span className="text-gray-600">Waiting for output...</span>
+                    <span className="text-muted-foreground animate-pulse">Waiting for output...</span>
                   )}
+                  <div ref={logsEndRef} />
                 </>
               ) : (
-                <span className="text-gray-600">Select a command from the timeline.</span>
+                <span className="text-muted-foreground">Select a command from the history.</span>
               )}
             </div>
-          </div>
+          </Card>
         </div>
-      </div>
-    </section>
+      )}
+    </div>
   );
 }
