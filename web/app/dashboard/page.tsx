@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { UnifiedCommandCenter } from "@/components/unified-command-center";
+import { CreateProjectDialog } from "@/components/create-project-dialog";
 
 type ProjectRow = {
   id: string;
@@ -93,7 +94,7 @@ export default async function DashboardPage() {
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium">Projects</CardTitle>
-              <span className="text-xs text-muted-foreground tabular-nums">{projects.length}</span>
+              <CreateProjectDialog userId={user.id} />
             </div>
           </CardHeader>
           <CardContent className="p-0">
