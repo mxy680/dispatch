@@ -75,6 +75,20 @@ export default async function DashboardPage() {
   const projects = dashJson.projects ?? [];
   const tasks = dashJson.tasks ?? [];
 
+  // Also fetch recent commands for the activity feed
+  const cmdRes = await fetch(`${backendUrl}/api/unified/timeline?limit=20`, {
+    cache: "no-store",
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+  });
+  const cmdJson = (await cmdRes.json()) as { commands?: { id: string; user_prompt?: string; command: string; status: string; provider?: string; project_name?: string; created_at: string }[] };
+  const recentCommands = cmdJson.commands ?? [];
+
+  // Merge tasks + commands into one activity feed, sorted by time
+  const activity = [
+    ...tasks.map((t) => ({ id: t.id, label: t.description, project: t.project_name, status: t.status, time: t.created_at, type: "task" as const })),
+    ...recentCommands.map((c) => ({ id: c.id, label: c.user_prompt || c.command, project: c.project_name, status: c.status, time: c.created_at, type: "command" as const })),
+  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 20);
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <DashboardPoller intervalMs={5000} />
@@ -131,35 +145,35 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Recent Tasks */}
+        {/* Recent Activity */}
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium">Recent Tasks</CardTitle>
-              <span className="text-xs text-muted-foreground tabular-nums">{tasks.length}</span>
+              <CardTitle className="text-sm font-medium">Recent Activity</CardTitle>
+              <span className="text-xs text-muted-foreground tabular-nums">{activity.length}</span>
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            {tasks.length === 0 ? (
+            {activity.length === 0 ? (
               <p className="px-6 py-8 text-sm text-muted-foreground text-center">
-                No tasks yet. Send a command above.
+                No activity yet. Send a command above.
               </p>
             ) : (
               <div className="divide-y divide-border max-h-[300px] overflow-auto">
-                {tasks.slice(0, 20).map((t) => (
-                  <div key={t.id} className="px-4 py-2.5 flex items-start gap-3">
+                {activity.map((a) => (
+                  <div key={a.id} className="px-4 py-2.5 flex items-start gap-3">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm truncate">{t.description}</p>
+                      <p className="text-sm truncate">{a.label}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {t.project_name ?? "Unknown project"}
+                        {a.project ?? "Unknown project"}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="outline" className={`text-[10px] border ${statusBadge(t.status)}`}>
-                        {t.status}
+                      <Badge variant="outline" className={`text-[10px] border ${statusBadge(a.status)}`}>
+                        {a.status}
                       </Badge>
                       <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                        {timeAgo(t.created_at)}
+                        {timeAgo(a.time)}
                       </span>
                     </div>
                   </div>
