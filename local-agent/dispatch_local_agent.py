@@ -226,46 +226,51 @@ def main() -> int:
         stderr = ""
         exit_code = 0
 
-        # Make `cd` persistent across commands (Cursor-like terminal semantics).
-        if _is_cd_command(command_text):
-            ok, new_cwd, msg = _apply_cd(command_text, cwd, cfg.project_path)
-            if ok:
-                session_cwd[session_id] = new_cwd
-                stdout = msg
-                exit_code = 0
+        try:
+            # Make `cd` persistent across commands (Cursor-like terminal semantics).
+            if _is_cd_command(command_text):
+                ok, new_cwd, msg = _apply_cd(command_text, cwd, cfg.project_path)
+                if ok:
+                    session_cwd[session_id] = new_cwd
+                    stdout = msg
+                    exit_code = 0
+                else:
+                    stderr = msg
+                    exit_code = 1
             else:
-                stderr = msg
-                exit_code = 1
-        else:
-            # Execute command (non-interactive) inside the session cwd.
-            # Ensure full user PATH is available (nohup can strip it).
-            env = os.environ.copy()
-            home = os.path.expanduser("~")
-            extra_paths = [
-                f"{home}/.local/bin",
-                f"{home}/.cargo/bin",
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-            ]
-            current_path = env.get("PATH", "")
-            for p in extra_paths:
-                if p not in current_path:
-                    current_path = f"{p}:{current_path}"
-            env["PATH"] = current_path
+                # Execute command (non-interactive) inside the session cwd.
+                # Ensure full user PATH is available (nohup can strip it).
+                env = os.environ.copy()
+                home = os.path.expanduser("~")
+                extra_paths = [
+                    f"{home}/.local/bin",
+                    f"{home}/.cargo/bin",
+                    "/usr/local/bin",
+                    "/opt/homebrew/bin",
+                ]
+                current_path = env.get("PATH", "")
+                for p in extra_paths:
+                    if p not in current_path:
+                        current_path = f"{p}:{current_path}"
+                env["PATH"] = current_path
 
-            proc = subprocess.Popen(
-                command_text,
-                cwd=cwd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-            )
-            stdout, stderr = proc.communicate()
-            exit_code = int(proc.returncode or 0)
+                proc = subprocess.Popen(
+                    command_text,
+                    cwd=cwd,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                stdout, stderr = proc.communicate()
+                exit_code = int(proc.returncode or 0)
+        except Exception as e:
+            stderr = f"Agent error: {e}"
+            exit_code = -1
+            print(f"[local-agent] execution error command_id={command_id}: {e}", file=sys.stderr)
 
-        # Stream logs (chunked)
+        # Stream logs (chunked) — always runs, even after errors
         seq = next_sequence_by_command.get(command_id, 0)
         try:
             for stream_name, text_data in (("stdout", stdout), ("stderr", stderr)):
@@ -284,6 +289,7 @@ def main() -> int:
 
         next_sequence_by_command[command_id] = seq
 
+        # Always report completion — never leave a command stuck as "running"
         status = "completed" if exit_code == 0 else "failed"
         try:
             _http_json(

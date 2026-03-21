@@ -759,9 +759,34 @@ def list_recent_terminal_commands_for_user(
     return result
 
 
+def _expire_stale_running_commands(user_id: str, stale_minutes: int = 5) -> None:
+    """Mark commands stuck in 'running' for too long as failed."""
+    sb = get_sb()
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat()
+    stale_res = (
+        sb.table("terminal_commands")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("status", "running")
+        .lt("started_at", cutoff)
+        .execute()
+    )
+    for cmd in (stale_res.data or []):
+        sb.table("terminal_commands").update({
+            "status": "failed",
+            "exit_code": -1,
+            "completed_at": _now_iso(),
+        }).eq("id", cmd["id"]).execute()
+        logger.warning("expired stale running command id=%s user=%s", cmd["id"], user_id)
+
+
 def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
     """Claim the oldest queued command across ALL of the user's projects."""
     sb = get_sb()
+
+    # Expire any commands stuck as "running" for too long.
+    _expire_stale_running_commands(user_id)
 
     # Find the oldest queued command belonging to this user.
     cmd_res = (
