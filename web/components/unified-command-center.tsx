@@ -63,7 +63,7 @@ export function UnifiedCommandCenter({
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? "");
   const [agentProvider, setAgentProvider] = useState<"cursor" | "claude">("claude");
-  const [mode, setMode] = useState<CommandMode>("shell");
+  const [mode, setMode] = useState<CommandMode>("agent");
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -189,6 +189,20 @@ export function UnifiedCommandCenter({
     }
   };
 
+  const noProjects = projects.length === 0;
+
+  if (noProjects) {
+    return (
+      <Card className="overflow-hidden">
+        <CardContent className="py-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            No projects yet. Create a project first to start sending commands.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {/* Command Input */}
@@ -198,16 +212,6 @@ export function UnifiedCommandCenter({
           <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30">
             <div className="flex rounded-md border border-border overflow-hidden mr-2">
               <button
-                onClick={() => setMode("shell")}
-                className={`px-3 py-1 text-xs font-mono transition-colors ${
-                  mode === "shell"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Shell
-              </button>
-              <button
                 onClick={() => setMode("agent")}
                 className={`px-3 py-1 text-xs font-mono transition-colors ${
                   mode === "agent"
@@ -216,6 +220,16 @@ export function UnifiedCommandCenter({
                 }`}
               >
                 Agent
+              </button>
+              <button
+                onClick={() => setMode("shell")}
+                className={`px-3 py-1 text-xs font-mono transition-colors ${
+                  mode === "shell"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Shell
               </button>
             </div>
 
