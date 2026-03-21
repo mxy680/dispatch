@@ -11,7 +11,7 @@ from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi import Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from faster_whisper import WhisperModel
+from services.transcription import transcribe_file
 from supabase import create_client, Client
 from pydantic import BaseModel
 from datetime import datetime
@@ -123,10 +123,8 @@ app.add_middleware(
 
 # --- 1. DATABASE (Supabase — no local init needed) ---
 
-# --- 2. GLOBAL STATE (WHISPER) ---
-logger.debug("loading whisper model")
-model = WhisperModel("tiny", device="cpu", compute_type="int8")
-logger.debug("whisper model loaded")
+# --- 2. GLOBAL STATE ---
+# Transcription now uses Groq's Whisper API (no local model needed)
 
 
 @app.middleware("http")
@@ -595,15 +593,13 @@ async def transcribe_audio(
             phone_number=getattr(user, "phone", None),
         )
 
-        # A. Transcribe
+        # A. Transcribe via Groq Whisper API
         logger.debug("transcribe step=a")
-        temp_filename = f"temp_{file.filename}"
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        segments, info = model.transcribe(temp_filename, beam_size=5)
-        transcript_text = " ".join([segment.text for segment in segments]).strip()
-        os.remove(temp_filename)
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=f"_{file.filename}", delete=True) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp.flush()
+            transcript_text = await transcribe_file(tmp.name)
         logger.debug("transcribe text_len=%s", len(transcript_text))
         
         # B. Context
@@ -1356,13 +1352,12 @@ async def twilio_recording(request: Request, background_tasks: BackgroundTasks):
                 auth=(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN")),
             )
 
-        # Transcribe using a temp file (no leftover files)
+        # Transcribe via Groq Whisper API
         audio_bytes = audio_response.content
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp:
             tmp.write(audio_bytes)
             tmp.flush()
-            segments, _ = model.transcribe(tmp.name, beam_size=5)
-        transcript = " ".join([s.text for s in segments]).strip()
+            transcript = await transcribe_file(tmp.name)
 
         # Look up user by phone number
         user_id = models.get_user_id_by_phone(caller_number)
