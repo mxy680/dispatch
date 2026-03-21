@@ -72,6 +72,11 @@ export function UnifiedCommandCenter({
     [filteredCommands, activeCommandId]
   );
 
+  const activeCommandIsDone = useMemo(() => {
+    if (!filteredActiveCommand) return false;
+    return ["completed", "failed", "cancelled"].includes(filteredActiveCommand.status);
+  }, [filteredActiveCommand]);
+
   useEffect(() => {
     const activeStillVisible =
       activeCommandId && filteredCommands.some((c) => c.id === activeCommandId);
@@ -425,6 +430,12 @@ export function UnifiedCommandCenter({
                       return failed ? `[stderr] ${l.chunk}` : l.chunk;
                     })
                     .join("")
+                  ) : activeCommandIsDone ? (
+                    <span className="text-gray-600">
+                      {filteredActiveCommand?.status === "failed" || filteredActiveCommand?.status === "cancelled"
+                        ? "Command failed (no logs)."
+                        : "Command completed (no output)."}
+                    </span>
                   ) : (
                     <span className="text-gray-600">Waiting for output...</span>
                   )}

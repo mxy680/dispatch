@@ -1,15 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
-
-type AgentTokenRow = {
-  id: string;
-  label?: string | null;
-  created_at: string;
-  last_used_at?: string | null;
-  revoked_at?: string | null;
-};
 
 type CompanionDeviceRow = {
   id: string;
@@ -20,6 +12,15 @@ type CompanionDeviceRow = {
   created_at: string;
 };
 
+type DeviceProjectLinkRow = {
+  id: string;
+  device_id: string;
+  project_id: string;
+  project_name?: string | null;
+  local_path?: string | null;
+  created_at: string;
+};
+
 function getErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
@@ -27,30 +28,12 @@ function getErrorMessage(err: unknown, fallback: string): string {
 
 export function SettingsAgentsPanel() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const [tokens, setTokens] = useState<AgentTokenRow[]>([]);
-  const [createdToken, setCreatedToken] = useState<string | null>(null);
-  const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [devices, setDevices] = useState<CompanionDeviceRow[]>([]);
-
-  const installCommand = useMemo(() => {
-    if (!createdToken) return null;
-    return `python3 local-agent/dispatch_local_agent.py --backend-url "${backendUrl}" --project-path "/absolute/path/to/project" --agent-token "${createdToken}"`;
-  }, [createdToken, backendUrl]);
-
-  const loadTokens = async () => {
-    setErr(null);
-    try {
-      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail ?? "Failed to load agent tokens");
-      setTokens((data.tokens ?? []) as AgentTokenRow[]);
-    } catch (e: unknown) {
-      setErr(getErrorMessage(e, "Failed to load agent tokens"));
-    }
-  };
+  const [deviceProjects, setDeviceProjects] = useState<Record<string, DeviceProjectLinkRow[]>>({});
+  const [loadingProjectsFor, setLoadingProjectsFor] = useState<string | null>(null);
 
   const loadDevices = async () => {
     try {
@@ -63,8 +46,44 @@ export function SettingsAgentsPanel() {
     }
   };
 
+  const loadDeviceProjects = async (deviceId: string) => {
+    setLoadingProjectsFor(deviceId);
+    setErr(null);
+    try {
+      const res = await authFetch(`${backendUrl}/api/device/${deviceId}/projects`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? "Failed to load project links");
+      setDeviceProjects((prev) => ({
+        ...prev,
+        [deviceId]: (data.links ?? []) as DeviceProjectLinkRow[],
+      }));
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to load project links"));
+    } finally {
+      setLoadingProjectsFor(null);
+    }
+  };
+
+  const saveDeviceProjectLocalPath = async (deviceId: string, projectId: string, nextLocalPath: string) => {
+    setLoadingProjectsFor(`${deviceId}:${projectId}`);
+    setErr(null);
+    try {
+      const res = await authFetch(`${backendUrl}/api/device/${deviceId}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectId, local_path: nextLocalPath }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail ?? "Failed to update local_path");
+      await loadDeviceProjects(deviceId);
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to update local_path"));
+    } finally {
+      setLoadingProjectsFor(null);
+    }
+  };
+
   useEffect(() => {
-    loadTokens();
     loadDevices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -89,42 +108,6 @@ export function SettingsAgentsPanel() {
     }
   };
 
-  const createToken = async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: label.trim() || null }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail ?? "Failed to create token");
-      setCreatedToken(String(data.token));
-      setLabel("");
-      await loadTokens();
-    } catch (e: unknown) {
-      setErr(getErrorMessage(e, "Failed to create token"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const revokeToken = async (id: string) => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await authFetch(`${backendUrl}/api/settings/agent-tokens/${id}`, { method: "DELETE" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail ?? "Failed to revoke token");
-      await loadTokens();
-    } catch (e: unknown) {
-      setErr(getErrorMessage(e, "Failed to revoke token"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
       <div className="bg-black/40 px-4 py-2 border-b border-white/5">
@@ -133,29 +116,13 @@ export function SettingsAgentsPanel() {
 
       <div className="p-6 space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-white">Connect a local agent</h2>
+          <h2 className="text-lg font-semibold text-white">Desktop Companion pairing</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Create an agent token, then run the one-line command locally. Tokens can be revoked anytime.
+            Click “Create pairing code”, then open the desktop companion app to pair and choose project folders.
           </p>
         </div>
 
         {err && <div className="text-xs font-mono text-red-400">{err}</div>}
-
-        <div className="flex gap-2">
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="Label (optional): e.g. MacBook Pro"
-            className="flex-1 text-sm bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-supabase-green"
-          />
-          <button
-            onClick={createToken}
-            disabled={loading}
-            className="px-4 py-2 rounded-md bg-supabase-green text-black font-medium hover:bg-supabase-green-dark disabled:opacity-50"
-          >
-            Create token
-          </button>
-        </div>
 
         <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-2">
           <div className="flex items-center justify-between">
@@ -176,97 +143,12 @@ export function SettingsAgentsPanel() {
             </p>
           )}
           <p className="text-[11px] text-gray-500">
-            Companion scaffold folder: <span className="font-mono">companion/</span>. Cursor extension scaffold:
-            <span className="font-mono"> cursor-extension/</span>.
+            Recommended: use the desktop GUI (`companion npm run gui`) to pick your project folder with an OS directory
+            picker. This writes the correct <span className="font-mono">local_path</span> so commands execute in the right place.
           </p>
-        </div>
-
-        {createdToken && (
-          <div className="bg-black/30 border border-white/10 rounded-lg p-4 space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-mono text-gray-500">Your new agent token (shown once)</p>
-              <button
-                onClick={() => navigator.clipboard.writeText(createdToken)}
-                className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300"
-              >
-                Copy
-              </button>
-            </div>
-            <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap break-words">
-              {createdToken}
-            </pre>
-
-            {installCommand && (
-              <>
-                <p className="text-xs font-mono text-gray-500 mt-3">Run this locally</p>
-                <div className="flex items-start gap-2">
-                  <pre className="flex-1 text-xs font-mono text-gray-200 whitespace-pre-wrap break-words bg-black/40 border border-white/10 rounded p-3">
-                    {installCommand}
-                  </pre>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(installCommand)}
-                    className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300"
-                  >
-                    Copy
-                  </button>
-                </div>
-                <div className="mt-3 bg-black/40 border border-white/10 rounded p-3">
-                  <p className="text-xs font-mono text-gray-500 mb-2">Cursor integration (step-by-step)</p>
-                  <ol className="text-xs text-gray-300 space-y-1 list-decimal list-inside">
-                    <li>Install the agent on the same machine where Cursor is running.</li>
-                    <li>Start the local helper using the command above.</li>
-                    <li>In Cursor, open your project folder matching <span className="font-mono">--project-path</span>.</li>
-                    <li>Install Cursor CLI or Claude CLI in that shell.</li>
-                    <li>In Dashboard, choose the provider and send a typed or voice command.</li>
-                    <li>Watch live command output in the Unified Command Center timeline.</li>
-                  </ol>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        <div className="pt-2">
-          <p className="text-xs font-mono text-gray-500 mb-2">Existing tokens</p>
-          <div className="space-y-2">
-            {tokens.map((t) => {
-              const revoked = Boolean(t.revoked_at);
-              return (
-                <div
-                  key={t.id}
-                  className={`border rounded-lg p-3 ${revoked ? "border-white/5 bg-black/10" : "border-white/10 bg-black/20"}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm text-gray-200 truncate">
-                        {t.label || "Unnamed token"}
-                      </div>
-                      <div className="text-[11px] font-mono text-gray-600">
-                        created {new Date(t.created_at).toLocaleString()}
-                        {t.last_used_at ? ` • last used ${new Date(t.last_used_at).toLocaleString()}` : ""}
-                        {revoked ? ` • revoked ${new Date(t.revoked_at as string).toLocaleString()}` : ""}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => revokeToken(t.id)}
-                      disabled={loading || revoked}
-                      className="text-xs font-mono px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 disabled:opacity-50"
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                  <div className="text-[11px] font-mono text-gray-700 mt-2">
-                    Token ID: {t.id}
-                  </div>
-                </div>
-              );
-            })}
-            {tokens.length === 0 && (
-              <div className="text-xs font-mono text-gray-600 bg-black/20 border border-white/10 rounded p-3">
-                No tokens yet.
-              </div>
-            )}
-          </div>
+          <p className="text-[11px] text-gray-500">
+            After pairing, open your desktop companion app and click “Link missing projects”.
+          </p>
         </div>
 
         <div className="pt-2">
@@ -280,6 +162,62 @@ export function SettingsAgentsPanel() {
                   {d.last_heartbeat ? ` • heartbeat ${new Date(d.last_heartbeat).toLocaleString()}` : ""}
                 </div>
                 <div className="text-[11px] font-mono text-gray-700 mt-1">Device ID: {d.id}</div>
+
+                <div className="pt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-mono text-gray-500">Project local paths</div>
+                    <button
+                      onClick={() => loadDeviceProjects(d.id)}
+                      disabled={loadingProjectsFor === d.id}
+                      className="text-xs font-mono px-2 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 disabled:opacity-50"
+                    >
+                      {loadingProjectsFor === d.id ? "Loading..." : "Refresh"}
+                    </button>
+                  </div>
+                  {(deviceProjects[d.id]?.length ?? 0) > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {deviceProjects[d.id].map((p) => (
+                        <div key={p.id} className="bg-black/20 border border-white/10 rounded p-2">
+                          <div className="text-[11px] font-mono text-gray-200">
+                            {p.project_name || p.project_id}
+                          </div>
+                          <div className="mt-1 flex gap-2 items-start">
+                            <input
+                              className="flex-1 text-[11px] font-mono bg-dark-bg border border-dark-border rounded-md px-2 py-2 text-white"
+                              value={p.local_path || ""}
+                              placeholder="Paste absolute local_path (folder) for this device"
+                              onChange={(e) => {
+                                const next = e.target.value;
+                                setDeviceProjects((prev) => ({
+                                  ...prev,
+                                  [d.id]: (prev[d.id] ?? []).map((row) =>
+                                    row.id === p.id ? { ...row, local_path: next } : row
+                                  ),
+                                }));
+                              }}
+                            />
+                            <button
+                              onClick={() => saveDeviceProjectLocalPath(d.id, p.project_id, p.local_path || "")}
+                              disabled={loadingProjectsFor === `${d.id}:${p.project_id}`}
+                              className="text-[11px] font-mono px-2 py-2 rounded bg-supabase-green text-black hover:bg-supabase-green-dark disabled:opacity-50"
+                            >
+                              Save
+                            </button>
+                          </div>
+                          {!p.local_path ? (
+                            <div className="text-[11px] font-mono text-red-300 mt-1">
+                              Missing local_path: companion will currently run in the wrong directory.
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs font-mono text-gray-500 mt-2">
+                      Click <span className="font-mono">Refresh</span> to load linked projects and local paths.
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
             {devices.length === 0 && (

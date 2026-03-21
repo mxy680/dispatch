@@ -127,9 +127,9 @@ def on_startup():
     init_database()
 
 # --- 2. GLOBAL STATE (WHISPER) ---
-logger.info("loading whisper model")
+logger.debug("loading whisper model")
 model = WhisperModel("tiny", device="cpu", compute_type="int8")
-logger.info("whisper model loaded")
+logger.debug("whisper model loaded")
 
 
 @app.middleware("http")
@@ -144,14 +144,24 @@ async def request_trace_middleware(request, call_next):
         raise
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
-    # Structured app logs for debugging; keep noisy paths at debug level.
+    # Structured app logs for debugging; keep polling/noisy paths at debug level.
     is_noisy = (
-        request.url.path.startswith("/api/agent/local/claim-next")
+        request.url.path.startswith("/api/device/claim-next")
+        or request.url.path.startswith("/api/device/heartbeat")
+        or request.url.path.startswith("/api/device/my-projects")
+        or request.url.path.startswith("/api/device/commands/")
+        or request.url.path.startswith("/api/device/cursor-context")
+        or request.url.path.startswith("/api/agent/local/claim-next")
         or request.url.path.startswith("/api/agent/local/heartbeat")
         or request.url.path.startswith("/api/agent/executions/")
         or request.url.path.startswith("/api/terminal/commands/")
+        or request.url.path.startswith("/api/unified/timeline")
     )
-    level = logging.DEBUG if is_noisy and response.status_code < 400 else logging.INFO
+    # Avoid spamming INFO for 401 polling failures; still keep errors visible.
+    if is_noisy:
+        level = logging.DEBUG if response.status_code < 500 else logging.WARNING
+    else:
+        level = logging.INFO
     logger.log(
         level,
         "request_id=%s method=%s path=%s status=%s elapsed_ms=%s",

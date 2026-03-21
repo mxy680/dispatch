@@ -36,3 +36,11 @@ export function getDeviceId() {
 export function getBackendUrl() {
   return loadConfig().backendUrl ?? "http://localhost:8000";
 }
+
+export function resetConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+  } catch {
+    // ignore
+  }
+}
