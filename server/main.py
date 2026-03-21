@@ -1255,9 +1255,10 @@ async def twilio_recording(request: Request):
 
     form = await request.form()
     recording_url = form.get("RecordingUrl")
-    
+    caller_number = form.get("From", "")
+
     response = VoiceResponse()
-    
+
     if not recording_url:
         response.say("Sorry, I could not process your command.")
         return Response(content=str(response), media_type="application/xml")
@@ -1269,26 +1270,29 @@ async def twilio_recording(request: Request):
                 f"{recording_url}.mp3",
                 auth=(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN")),
             )
-        
+
         # Transcribe it
         audio_bytes = audio_response.content
         with open("temp_twilio.mp3", "wb") as f:
             f.write(audio_bytes)
-        
+
         segments, _ = model.transcribe("temp_twilio.mp3", beam_size=5)
         transcript = " ".join([s.text for s in segments]).strip()
         os.remove("temp_twilio.mp3")
-        
-        # Parse intent
-        intent_data = await parse_intent(transcript, []) or {"intent": "unknown"}
-        
+
+        # Look up user by phone number and save call session
+        user_id = models.get_user_id_by_phone(caller_number)
+        if user_id:
+            session_id = models.create_call_session(user_id, caller_number)
+            intent_data = await parse_intent(transcript, models.get_user_projects(user_id)) or {"intent": "unknown"}
+            models.update_call_session(session_id, transcript, str(intent_data))
+        else:
+            intent_data = await parse_intent(transcript, []) or {"intent": "unknown"}
+
         response.say(f"I heard: {transcript}. Processing your command now.")
+
     except Exception as e:
         print(f"[TWILIO] Error: {e}")
         response.say("Sorry, something went wrong processing your command.")
-    
-    return Response(content=str(response), media_type="application/xml")
 
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
+    return Response(content=str(response), media_type="application/xml")

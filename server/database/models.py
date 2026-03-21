@@ -408,6 +408,16 @@ def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> 
 
 # ==================== CALL SESSIONS ====================
 
+def get_user_id_by_phone(phone_number: str) -> str | None:
+    """Look up a user by their phone number."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id FROM users WHERE phone_number = ?",
+        (phone_number,)
+    ).fetchone()
+    conn.close()
+    return row["id"] if row else None
+
 def create_call_session(user_id, phone_number):
     """Create a new call session."""
     conn = get_db_connection()
