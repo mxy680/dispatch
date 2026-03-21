@@ -81,8 +81,14 @@ def delete_project(project_id: str):
             sb.table("terminal_logs").delete().in_("command_id", cmd_ids).execute()
             sb.table("terminal_commands").delete().in_("id", cmd_ids).execute()
         sb.table("terminal_sessions").delete().in_("id", session_ids).execute()
-    # Tasks
+    # Tasks + agent executions
+    tasks_res = sb.table("tasks").select("id").eq("project_id", project_id).execute()
+    task_ids = [t["id"] for t in (tasks_res.data or [])]
+    if task_ids:
+        sb.table("agent_executions").delete().in_("task_id", task_ids).execute()
     sb.table("tasks").delete().eq("project_id", project_id).execute()
+    # Instances (local agent registrations)
+    sb.table("instances").delete().eq("project_id", project_id).execute()
     # Device project links
     sb.table("device_project_links").delete().eq("project_id", project_id).execute()
     # Cursor context
