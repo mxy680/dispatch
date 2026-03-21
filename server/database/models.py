@@ -96,13 +96,11 @@ def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = N
         if not existing.get("file_path"):
             computed = compute_default_project_file_path(get_project_base_path_for_user(user_id), name)
             if computed:
-                conn = get_db_connection()
-                conn.execute(
-                    "UPDATE projects SET file_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
-                    (computed, existing["id"]),
-                )
-                conn.commit()
-                conn.close()
+                sb = get_sb()
+                sb.table("projects").update({
+                    "file_path": computed,
+                    "last_accessed": _now_iso(),
+                }).eq("id", existing["id"]).execute()
                 existing["file_path"] = computed
 
         # If we now have a file_path, ensure devices can claim it (but don't override non-empty local_path).
@@ -127,24 +125,18 @@ def get_user_projects_with_task_counts(user_id):
 
 
 def _ensure_user_preferences_row(user_id: str) -> None:
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)",
-        (user_id,),
-    )
-    conn.commit()
-    conn.close()
+    sb = get_sb()
+    sb.table("user_preferences").upsert(
+        {"user_id": user_id},
+        on_conflict="user_id",
+    ).execute()
 
 
 def get_user_preferences(user_id: str) -> dict:
     _ensure_user_preferences_row(user_id)
-    conn = get_db_connection()
-    row = conn.execute(
-        "SELECT * FROM user_preferences WHERE user_id = ?",
-        (user_id,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else {"user_id": user_id}
+    sb = get_sb()
+    res = sb.table("user_preferences").select("*").eq("user_id", user_id).maybe_single().execute()
+    return res.data if res and res.data else {"user_id": user_id}
 
 
 def get_default_provider_for_user(user_id: str) -> str:
@@ -160,24 +152,14 @@ def set_default_provider_for_user(user_id: str, provider: str) -> None:
     if provider not in {"cursor", "claude", "shell"}:
         provider = "cursor"
     _ensure_user_preferences_row(user_id)
-    conn = get_db_connection()
-    conn.execute(
-        "UPDATE user_preferences SET default_provider = ? WHERE user_id = ?",
-        (provider, user_id),
-    )
-    conn.commit()
-    conn.close()
+    sb = get_sb()
+    sb.table("user_preferences").update({"default_provider": provider}).eq("user_id", user_id).execute()
 
 
 def set_terminal_access_for_user(user_id: str, granted: bool) -> None:
     _ensure_user_preferences_row(user_id)
-    conn = get_db_connection()
-    conn.execute(
-        "UPDATE user_preferences SET terminal_access_granted = ? WHERE user_id = ?",
-        (1 if granted else 0, user_id),
-    )
-    conn.commit()
-    conn.close()
+    sb = get_sb()
+    sb.table("user_preferences").update({"terminal_access_granted": granted}).eq("user_id", user_id).execute()
 
 
 def get_terminal_access_for_user(user_id: str) -> bool:
@@ -198,14 +180,10 @@ def get_project_base_path_for_user(user_id: str) -> str | None:
 def set_project_base_path_for_user(user_id: str, base_path: str | None) -> None:
     _ensure_user_preferences_row(user_id)
     base_path = (base_path or "").strip()
-    conn = get_db_connection()
-    if not base_path:
-        conn.execute("UPDATE user_preferences SET project_base_path = NULL WHERE user_id = ?", (user_id,))
-    else:
-        # Store as-is; worker will create folders locally.
-        conn.execute("UPDATE user_preferences SET project_base_path = ? WHERE user_id = ?", (base_path, user_id))
-    conn.commit()
-    conn.close()
+    sb = get_sb()
+    sb.table("user_preferences").update({
+        "project_base_path": base_path if base_path else None,
+    }).eq("user_id", user_id).execute()
 
 
 def _safe_project_folder_name(name: str) -> str:
@@ -341,13 +319,10 @@ def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> 
 
 def get_user_id_by_phone(phone_number: str) -> str | None:
     """Look up a user by their phone number."""
-    conn = get_db_connection()
-    row = conn.execute(
-        "SELECT id FROM users WHERE phone_number = ?",
-        (phone_number,)
-    ).fetchone()
-    conn.close()
-    return row["id"] if row else None
+    sb = get_sb()
+    res = sb.table("users").select("id").eq("phone_number", phone_number).maybe_single().execute()
+    data = res.data if res else None
+    return data["id"] if data else None
 
 def create_call_session(user_id, phone_number):
     sb = get_sb()
@@ -691,21 +666,21 @@ def get_or_create_terminal_session_for_project(
     active = get_active_instances_for_project(project_id, within_seconds=within_seconds)
     instance_id = active[0]["id"] if active else None
 
-    conn = get_db_connection()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM terminal_sessions
-        WHERE user_id = ? AND project_id = ? AND name = ?
-        ORDER BY updated_at DESC
-        LIMIT 1
-        """,
-        (user_id, project_id, name),
-    ).fetchone()
-    conn.close()
+    sb = get_sb()
+    res = (
+        sb.table("terminal_sessions")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .eq("name", name)
+        .order("updated_at", desc=True)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    session = res.data if res else None
 
-    if row:
-        session = dict(row)
+    if session:
         if not session.get("instance_id") and instance_id:
             bind_terminal_session_instance(session["id"], instance_id)
             refreshed = get_terminal_session(session["id"])
@@ -728,25 +703,31 @@ def list_recent_terminal_commands_for_user(
     user_id: str,
     limit: int = 100,
 ) -> list[dict]:
-    conn = get_db_connection()
-    rows = conn.execute(
-        """
-        SELECT
-            tc.*,
-            ts.project_id,
-            ts.name AS session_name,
-            p.name AS project_name
-        FROM terminal_commands tc
-        JOIN terminal_sessions ts ON ts.id = tc.session_id
-        LEFT JOIN projects p ON p.id = ts.project_id
-        WHERE tc.user_id = ?
-        ORDER BY tc.created_at DESC
-        LIMIT ?
-        """,
-        (user_id, limit),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    sb = get_sb()
+    res = (
+        sb.table("terminal_commands")
+        .select("*, terminal_sessions!inner(project_id, name, projects(name))")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    raw_rows = res.data or []
+    # Flatten nested session/project info (immutable reconstruction)
+    result = []
+    for row in raw_rows:
+        ts = row.get("terminal_sessions")
+        project_id = ts.get("project_id") if ts else None
+        session_name = ts.get("name") if ts else None
+        proj = ts.get("projects") if ts else None
+        project_name = proj.get("name") if proj else None
+        result.append({
+            **{k: v for k, v in row.items() if k != "terminal_sessions"},
+            "project_id": project_id,
+            "session_name": session_name,
+            "project_name": project_name,
+        })
+    return result
 
 
 def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
@@ -806,40 +787,64 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
     """
     Claim the oldest queued command where command session project is linked to device.
     Returns the command dict with project_id and local_path attached.
+    Uses an RPC function for atomicity, falling back to a two-step approach.
     """
-    conn = get_db_connection()
-    try:
-        row = conn.execute(
-            """
-            SELECT tc.*, ts.project_id, dpl.local_path AS project_local_path
-            FROM terminal_commands tc
-            JOIN terminal_sessions ts ON ts.id = tc.session_id
-            JOIN device_project_links dpl ON dpl.project_id = ts.project_id
-            WHERE dpl.device_id = ?
-              AND tc.status = 'queued'
-            ORDER BY tc.created_at ASC
-            LIMIT 1
-            """,
-            (device_id,),
-        ).fetchone()
-        if not row:
-            return None
-        command_id = row["id"]
-        res = conn.execute(
-            """
-            UPDATE terminal_commands
-            SET status = 'running', started_at = CURRENT_TIMESTAMP
-            WHERE id = ? AND status = 'queued'
-            """,
-            (command_id,),
-        )
-        if res.rowcount != 1:
-            conn.commit()
-            return None
-        conn.commit()
-        return dict(row)
-    finally:
-        conn.close()
+    sb = get_sb()
+    # Step 1: Find the oldest queued command linked to this device.
+    # Get project IDs linked to this device first.
+    links_res = sb.table("device_project_links").select("project_id, local_path").eq("device_id", device_id).execute()
+    links = links_res.data or []
+    if not links:
+        return None
+
+    project_ids = [lnk["project_id"] for lnk in links]
+    local_path_map = {lnk["project_id"]: lnk.get("local_path") for lnk in links}
+
+    # Find sessions for those projects.
+    sessions_res = sb.table("terminal_sessions").select("id, project_id").in_("project_id", project_ids).execute()
+    sessions = sessions_res.data or []
+    if not sessions:
+        return None
+
+    session_ids = [s["id"] for s in sessions]
+    session_project_map = {s["id"]: s["project_id"] for s in sessions}
+
+    # Find oldest queued command in those sessions.
+    cmd_res = (
+        sb.table("terminal_commands")
+        .select("*")
+        .in_("session_id", session_ids)
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    cmd = cmd_res.data if cmd_res else None
+    if not cmd:
+        return None
+
+    command_id = cmd["id"]
+
+    # Step 2: Atomically claim it (update only if still queued).
+    sb.table("terminal_commands").update({
+        "status": "running",
+        "started_at": _now_iso(),
+    }).eq("id", command_id).eq("status", "queued").execute()
+
+    # Re-fetch to confirm claim succeeded.
+    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
+    verified = verify_res.data if verify_res else None
+    if not verified or verified.get("status") != "running":
+        return None
+
+    # Attach project_id and local_path.
+    project_id = session_project_map.get(cmd["session_id"])
+    return {
+        **verified,
+        "project_id": project_id,
+        "project_local_path": local_path_map.get(project_id),
+    }
 
 
 # ==================== AGENT TOKENS (Local Agent Pairing) ====================
@@ -905,138 +910,108 @@ def _hash_device_token(token: str) -> str:
 
 
 def create_device_pairing(*, user_id: str, name: str | None, platform: str | None, expires_minutes: int = 10) -> dict:
-    conn = get_db_connection()
+    sb = get_sb()
     device_id = str(uuid.uuid4())
     pairing_code = secrets.token_urlsafe(8)
-    expires_at = (datetime.utcnow() + timedelta(minutes=expires_minutes)).isoformat()
-    conn.execute(
-        """
-        INSERT INTO companion_devices
-            (id, user_id, name, platform, status, pairing_code, pairing_expires_at)
-        VALUES (?, ?, ?, ?, 'pending', ?, ?)
-        """,
-        (device_id, user_id, name, platform, pairing_code, expires_at),
-    )
-    conn.commit()
-    conn.close()
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)).isoformat()
+    sb.table("companion_devices").insert({
+        "id": device_id,
+        "user_id": user_id,
+        "name": name,
+        "platform": platform,
+        "status": "pending",
+        "pairing_code": pairing_code,
+        "pairing_expires_at": expires_at,
+    }).execute()
     return {"device_id": device_id, "pairing_code": pairing_code, "expires_at": expires_at}
 
 
 def complete_device_pairing(*, pairing_code: str, device_name: str | None = None, platform: str | None = None) -> dict | None:
-    conn = get_db_connection()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM companion_devices
-        WHERE pairing_code = ?
-          AND status = 'pending'
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (pairing_code,),
-    ).fetchone()
-    if not row:
-        conn.close()
+    sb = get_sb()
+    res = (
+        sb.table("companion_devices")
+        .select("*")
+        .eq("pairing_code", pairing_code)
+        .eq("status", "pending")
+        .order("created_at", desc=True)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    device = res.data if res else None
+    if not device:
         return None
-    device = dict(row)
     expires_at = device.get("pairing_expires_at")
-    if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
-        conn.close()
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
         return None
     token = secrets.token_urlsafe(32)
     token_hash = _hash_device_token(token)
-    conn.execute(
-        """
-        UPDATE companion_devices
-        SET name = COALESCE(?, name),
-            platform = COALESCE(?, platform),
-            status = 'online',
-            pairing_code = NULL,
-            pairing_expires_at = NULL,
-            device_token_hash = ?,
-            last_heartbeat = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (device_name, platform, token_hash, device["id"]),
-    )
-    conn.commit()
-    conn.close()
+    update_data = {
+        "status": "online",
+        "pairing_code": None,
+        "pairing_expires_at": None,
+        "device_token_hash": token_hash,
+        "last_heartbeat": _now_iso(),
+    }
+    if device_name is not None:
+        update_data["name"] = device_name
+    if platform is not None:
+        update_data["platform"] = platform
+    sb.table("companion_devices").update(update_data).eq("id", device["id"]).execute()
     return {"device_id": device["id"], "user_id": device["user_id"], "device_token": token}
 
 
 def get_device_by_token(device_token: str) -> dict | None:
+    sb = get_sb()
     token_hash = _hash_device_token(device_token)
-    conn = get_db_connection()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM companion_devices
-        WHERE device_token_hash = ?
-        LIMIT 1
-        """,
-        (token_hash,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).maybe_single().execute()
+    return res.data if res else None
 
 
 def touch_device_heartbeat(device_id: str) -> None:
-    conn = get_db_connection()
-    conn.execute(
-        "UPDATE companion_devices SET status = 'online', last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?",
-        (device_id,),
-    )
-    conn.commit()
-    conn.close()
+    sb = get_sb()
+    sb.table("companion_devices").update({
+        "status": "online",
+        "last_heartbeat": _now_iso(),
+    }).eq("id", device_id).execute()
 
 
 def list_devices_for_user(user_id: str) -> list[dict]:
-    conn = get_db_connection()
-    rows = conn.execute(
-        """
-        SELECT id, user_id, name, platform, status, last_heartbeat, created_at
-        FROM companion_devices
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        """,
-        (user_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    sb = get_sb()
+    res = (
+        sb.table("companion_devices")
+        .select("id, user_id, name, platform, status, last_heartbeat, created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data or []
 
 
 def link_device_project(*, device_id: str, project_id: str, local_path: str | None = None) -> dict:
-    conn = get_db_connection()
-    existing = conn.execute(
-        """
-        SELECT *
-        FROM device_project_links
-        WHERE device_id = ? AND project_id = ?
-        LIMIT 1
-        """,
-        (device_id, project_id),
-    ).fetchone()
-    if existing:
-        row = dict(existing)
-        if local_path and row.get("local_path") != local_path:
-            conn.execute(
-                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
-                (local_path, row["id"]),
-            )
-            conn.commit()
-            row["local_path"] = local_path
-        conn.close()
-        return row
-    link_id = str(uuid.uuid4())
-    conn.execute(
-        """
-        INSERT INTO device_project_links (id, device_id, project_id, local_path)
-        VALUES (?, ?, ?, ?)
-        """,
-        (link_id, device_id, project_id, local_path),
+    sb = get_sb()
+    res = (
+        sb.table("device_project_links")
+        .select("*")
+        .eq("device_id", device_id)
+        .eq("project_id", project_id)
+        .limit(1)
+        .maybe_single()
+        .execute()
     )
-    conn.commit()
-    conn.close()
+    existing = res.data if res else None
+    if existing:
+        if local_path and existing.get("local_path") != local_path:
+            sb.table("device_project_links").update({"local_path": local_path}).eq("id", existing["id"]).execute()
+            return {**existing, "local_path": local_path}
+        return existing
+    link_id = str(uuid.uuid4())
+    sb.table("device_project_links").insert({
+        "id": link_id,
+        "device_id": device_id,
+        "project_id": project_id,
+        "local_path": local_path,
+    }).execute()
     return {"id": link_id, "device_id": device_id, "project_id": project_id, "local_path": local_path}
 
 
@@ -1045,38 +1020,30 @@ def _link_device_project_local_path_if_missing(*, device_id: str, project_id: st
     Set device_project_links.local_path to `local_path` only when it's currently empty/missing.
     This avoids overwriting user-customized local paths.
     """
-    conn = get_db_connection()
-    existing = conn.execute(
-        """
-        SELECT id, local_path
-        FROM device_project_links
-        WHERE device_id = ? AND project_id = ?
-        LIMIT 1
-        """,
-        (device_id, project_id),
-    ).fetchone()
+    sb = get_sb()
+    res = (
+        sb.table("device_project_links")
+        .select("id, local_path")
+        .eq("device_id", device_id)
+        .eq("project_id", project_id)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    existing = res.data if res else None
 
     if existing:
-        row = dict(existing)
-        if not row.get("local_path"):
-            conn.execute(
-                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
-                (local_path, row["id"]),
-            )
-            conn.commit()
-        conn.close()
+        if not existing.get("local_path"):
+            sb.table("device_project_links").update({"local_path": local_path}).eq("id", existing["id"]).execute()
         return
 
     link_id = str(uuid.uuid4())
-    conn.execute(
-        """
-        INSERT INTO device_project_links (id, device_id, project_id, local_path)
-        VALUES (?, ?, ?, ?)
-        """,
-        (link_id, device_id, project_id, local_path),
-    )
-    conn.commit()
-    conn.close()
+    sb.table("device_project_links").insert({
+        "id": link_id,
+        "device_id": device_id,
+        "project_id": project_id,
+        "local_path": local_path,
+    }).execute()
 
 
 def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, project_id: str, local_path: str) -> None:
@@ -1090,19 +1057,24 @@ def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, 
 
 
 def get_device_project_links(device_id: str) -> list[dict]:
-    conn = get_db_connection()
-    rows = conn.execute(
-        """
-        SELECT dpl.*, p.name AS project_name
-        FROM device_project_links dpl
-        LEFT JOIN projects p ON p.id = dpl.project_id
-        WHERE dpl.device_id = ?
-        ORDER BY dpl.created_at DESC
-        """,
-        (device_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    sb = get_sb()
+    res = (
+        sb.table("device_project_links")
+        .select("*, projects(name)")
+        .eq("device_id", device_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    raw_rows = res.data or []
+    # Flatten: {projects: {name: "foo"}} -> {project_name: "foo"} (immutable reconstruction)
+    result = []
+    for row in raw_rows:
+        proj = row.get("projects")
+        result.append({
+            **{k: v for k, v in row.items() if k != "projects"},
+            "project_name": proj.get("name") if proj else None,
+        })
+    return result
 
 
 def save_cursor_context(
@@ -1113,34 +1085,32 @@ def save_cursor_context(
     selection: str | None,
     diagnostics: str | None,
 ) -> str:
-    conn = get_db_connection()
+    sb = get_sb()
     context_id = str(uuid.uuid4())
-    conn.execute(
-        """
-        INSERT INTO cursor_context_snapshots (id, device_id, project_id, file_path, selection, diagnostics)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (context_id, device_id, project_id, file_path, selection, diagnostics),
-    )
-    conn.commit()
-    conn.close()
+    sb.table("cursor_context_snapshots").insert({
+        "id": context_id,
+        "device_id": device_id,
+        "project_id": project_id,
+        "file_path": file_path,
+        "selection": selection,
+        "diagnostics": diagnostics,
+    }).execute()
     return context_id
 
 
 def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None:
-    conn = get_db_connection()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM cursor_context_snapshots
-        WHERE device_id = ? AND project_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (device_id, project_id),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    sb = get_sb()
+    res = (
+        sb.table("cursor_context_snapshots")
+        .select("*")
+        .eq("device_id", device_id)
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    return res.data if res else None
 
 
 # ==================== USER DATA DELETION ====================

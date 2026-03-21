@@ -1,3 +1,5 @@
+.env
+.venv/
 server/.env
 server/test.mp3
 server/__pycache__/
