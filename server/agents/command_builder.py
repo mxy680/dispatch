@@ -55,7 +55,7 @@ def build_provider_command(*, provider: str, prompt: str) -> str:
 
     if provider == "claude":
         claude_bin = shutil.which("claude") or "claude"
-        return f"{claude_bin} -p {safe_prompt}"
+        return f"{claude_bin} -p {safe_prompt} --dangerously-skip-permissions"
 
     # shell: pass the prompt as a raw command
     return prompt
