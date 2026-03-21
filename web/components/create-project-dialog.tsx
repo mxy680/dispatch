@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,11 @@ export function CreateProjectDialog({ userId }: { userId: string }) {
   const [filePath, setFilePath] = useState(defaultBasePath);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  if (!mounted) return <Button variant="outline" size="sm" className="text-xs">+ New Project</Button>;
 
   const submit = async () => {
     if (!name.trim()) return;

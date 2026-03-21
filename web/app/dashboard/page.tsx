@@ -13,8 +13,7 @@ import {
 } from "@/components/ui/table";
 import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { UnifiedCommandCenter } from "@/components/unified-command-center";
-import dynamic from "next/dynamic";
-const CreateProjectDialog = dynamic(() => import("@/components/create-project-dialog").then(m => m.CreateProjectDialog), { ssr: false });
+import { CreateProjectDialog } from "@/components/create-project-dialog";
 
 type ProjectRow = {
   id: string;
