@@ -731,10 +731,50 @@ def list_recent_terminal_commands_for_user(
 
 
 def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
+    """Claim the oldest queued command for the project this instance is registered to."""
     sb = get_sb()
-    res = sb.rpc("claim_next_queued_command", {"p_instance_id": instance_id}).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
+
+    # Look up which project this instance belongs to.
+    inst_res = sb.table("instances").select("project_id").eq("id", instance_id).maybe_single().execute()
+    inst = inst_res.data if inst_res else None
+    if not inst or not inst.get("project_id"):
+        return None
+    project_id = inst["project_id"]
+
+    # Find sessions for that project.
+    sessions_res = sb.table("terminal_sessions").select("id").eq("project_id", project_id).execute()
+    session_ids = [s["id"] for s in (sessions_res.data or [])]
+    if not session_ids:
+        return None
+
+    # Find oldest queued command in those sessions.
+    cmd_res = (
+        sb.table("terminal_commands")
+        .select("*")
+        .in_("session_id", session_ids)
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    cmd = cmd_res.data if cmd_res else None
+    if not cmd:
+        return None
+
+    # Claim it (update only if still queued).
+    sb.table("terminal_commands").update({
+        "status": "running",
+        "started_at": _now_iso(),
+    }).eq("id", cmd["id"]).eq("status", "queued").execute()
+
+    # Re-fetch to confirm claim.
+    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).maybe_single().execute()
+    verified = verify_res.data if verify_res else None
+    if not verified or verified.get("status") != "running":
+        return None
+
+    return verified
 
 
 def complete_terminal_command(
