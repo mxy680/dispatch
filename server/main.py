@@ -1329,12 +1329,13 @@ async def twilio_incoming(request: Request):
 
 
 @app.post("/twilio/recording")
-async def twilio_recording(request: Request):
+async def twilio_recording(request: Request, background_tasks: BackgroundTasks):
     """
     Twilio calls this after the recording is done.
-    Downloads the audio and runs it through our transcription pipeline.
+    Downloads the audio, transcribes, parses intent, and dispatches to agent pipeline.
     """
     import httpx
+    import tempfile
     from twilio.twiml.voice_response import VoiceResponse
 
     form = await request.form()
@@ -1355,28 +1356,61 @@ async def twilio_recording(request: Request):
                 auth=(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN")),
             )
 
-        # Transcribe it
+        # Transcribe using a temp file (no leftover files)
         audio_bytes = audio_response.content
-        with open("temp_twilio.mp3", "wb") as f:
-            f.write(audio_bytes)
-
-        segments, _ = model.transcribe("temp_twilio.mp3", beam_size=5)
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            segments, _ = model.transcribe(tmp.name, beam_size=5)
         transcript = " ".join([s.text for s in segments]).strip()
-        os.remove("temp_twilio.mp3")
 
-        # Look up user by phone number and save call session
+        # Look up user by phone number
         user_id = models.get_user_id_by_phone(caller_number)
-        if user_id:
-            session_id = models.create_call_session(user_id, caller_number)
-            intent_data = await parse_intent(transcript, models.get_user_projects(user_id)) or {"intent": "unknown"}
-            models.update_call_session(session_id, transcript, str(intent_data))
-        else:
+        if not user_id:
+            logger.warning("twilio recording from unknown number=%s", caller_number)
             intent_data = await parse_intent(transcript, []) or {"intent": "unknown"}
+            response.say(f"I heard: {transcript}. But I could not find your account.")
+            return Response(content=str(response), media_type="application/xml")
 
-        response.say(f"I heard: {transcript}. Processing your command now.")
+        # Save call session
+        call_session_id = models.create_call_session(user_id, caller_number)
+        user_projects = models.get_user_projects(user_id)
+        intent_data = await parse_intent(transcript, user_projects) or {"intent": "unknown"}
+        models.update_call_session(call_session_id, transcript, str(intent_data))
+
+        intent_type = intent_data.get("intent", "unknown")
+        task_description = intent_data.get("task_description") or transcript
+        project_name = intent_data.get("project_name")
+
+        # Create a task from the voice command
+        logged_task_id = None
+        if intent_type != "unknown":
+            logged_task_id = models.log_task(
+                user_id=user_id,
+                project_name=project_name,
+                projects=user_projects,
+                description=task_description,
+                raw_transcript=transcript,
+                intent_type=intent_type,
+                intent_confidence=None,
+                output_summary=None,
+                voice_command=transcript,
+            )
+
+        # Dispatch to agent pipeline if actionable
+        if intent_type in ("create_task", "fix_bug") and logged_task_id:
+            terminal_granted = get_terminal_access(user_id)
+            background_tasks.add_task(agent_dispatch_task, logged_task_id, intent_data, terminal_granted)
+            logger.info(
+                "twilio dispatch queued task_id=%s user=%s terminal=%s",
+                logged_task_id, user_id, terminal_granted,
+            )
+            response.say(f"I heard: {transcript}. Your command is being dispatched now.")
+        else:
+            response.say(f"I heard: {transcript}. I've recorded your request.")
 
     except Exception as e:
-        print(f"[TWILIO] Error: {e}")
+        logger.error("twilio recording error=%r", e)
         response.say("Sorry, something went wrong processing your command.")
 
     return Response(content=str(response), media_type="application/xml")
