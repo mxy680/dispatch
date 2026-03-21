@@ -34,6 +34,8 @@ export function SettingsAgentsPanel() {
   const [devices, setDevices] = useState<CompanionDeviceRow[]>([]);
   const [deviceProjects, setDeviceProjects] = useState<Record<string, DeviceProjectLinkRow[]>>({});
   const [loadingProjectsFor, setLoadingProjectsFor] = useState<string | null>(null);
+  const [projectBasePath, setProjectBasePath] = useState<string>("");
+  const [savingBasePath, setSavingBasePath] = useState(false);
 
   const loadDevices = async () => {
     try {
@@ -43,6 +45,18 @@ export function SettingsAgentsPanel() {
       setDevices((data.devices ?? []) as CompanionDeviceRow[]);
     } catch (e: unknown) {
       setErr(getErrorMessage(e, "Failed to load devices"));
+    }
+  };
+
+  const loadProjectBasePath = async () => {
+    setErr(null);
+    try {
+      const res = await authFetch(`${backendUrl}/api/settings/project-base-path`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? "Failed to load project base path");
+      setProjectBasePath(String(data?.base_path ?? ""));
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e, "Failed to load project base path"));
     }
   };
 
@@ -85,6 +99,7 @@ export function SettingsAgentsPanel() {
 
   useEffect(() => {
     loadDevices();
+    loadProjectBasePath();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -120,6 +135,51 @@ export function SettingsAgentsPanel() {
           <p className="text-sm text-gray-400 mt-1">
             Click “Create pairing code”, then open the desktop companion app to pair and choose project folders.
           </p>
+        </div>
+
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-3">
+          <div>
+            <div className="text-xs font-mono text-gray-500">New Projects Location</div>
+            <div className="text-sm text-gray-300 mt-1">
+              When you create a new project, the app will place it under this absolute directory on your computer.
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={projectBasePath}
+              onChange={(e) => setProjectBasePath(e.target.value)}
+              placeholder="/absolute/path/to/projects"
+              className="flex-1 text-sm bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-supabase-green"
+            />
+            <button
+              onClick={async () => {
+                setSavingBasePath(true);
+                setErr(null);
+                try {
+                  const next = projectBasePath.trim() || null;
+                  const res = await authFetch(`${backendUrl}/api/settings/project-base-path`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ base_path: next }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) throw new Error(data?.detail ?? "Failed to save base path");
+                  setProjectBasePath(String(data?.base_path ?? ""));
+                } catch (e: unknown) {
+                  setErr(getErrorMessage(e, "Failed to save base path"));
+                } finally {
+                  setSavingBasePath(false);
+                }
+              }}
+              disabled={savingBasePath}
+              className="px-4 py-2 rounded-md bg-supabase-green text-black font-medium hover:bg-supabase-green-dark disabled:opacity-50"
+            >
+              {savingBasePath ? "Saving..." : "Save"}
+            </button>
+          </div>
+          <div className="text-[11px] text-gray-500">
+            This can be set once. Folder creation happens on the desktop companion when it needs to run commands.
+          </div>
         </div>
 
         {err && <div className="text-xs font-mono text-red-400">{err}</div>}

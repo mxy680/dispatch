@@ -142,6 +142,18 @@ export function startWorker() {
       for (const link of result?.links ?? []) {
         if (link.project_id && link.local_path) {
           projectPathsByProjectId[link.project_id] = link.local_path;
+          // Proactively create the folder so first command has a working cwd.
+          try {
+            if (typeof link.local_path === "string" && link.local_path.trim()) {
+              const p = String(link.local_path);
+              if (path.isAbsolute(p) && p !== "/" && !fs.existsSync(p)) {
+                fs.mkdirSync(p, { recursive: true });
+                console.log(`[worker] created linked project directory ${p}`);
+              }
+            }
+          } catch {
+            // ignore; we'll still rely on execution-time checks
+          }
         }
       }
     } catch (err) {
@@ -218,19 +230,26 @@ export function startWorker() {
 
       // If local path exists but is invalid, fail fast with a helpful error.
       if (typeof cwd === "string" && !fs.existsSync(cwd)) {
-        const msg = `[config] local project path does not exist: ${cwd}`;
-        console.error(`[worker] ${msg}`);
+        // Create the directory on the user's machine so `cd`/commands work
+        // on first-time setups where folders don't exist yet.
         try {
-          await appendLogs(commandId, 0, "stderr", [msg + "\n"]);
-        } catch {
-          // ignore append failures
-        }
-        try {
-          await completeCommand(commandId, "failed", 1);
+          fs.mkdirSync(cwd, { recursive: true });
+          console.log(`[worker] created missing project directory cwd=${cwd}`);
         } catch (err) {
-          console.error("[worker] complete failed:", err.message);
+          const msg = `[config] local project path does not exist and failed to create: ${cwd}`;
+          console.error(`[worker] ${msg}`);
+          try {
+            await appendLogs(commandId, 0, "stderr", [msg + "\n"]);
+          } catch {
+            // ignore append failures
+          }
+          try {
+            await completeCommand(commandId, "failed", 1);
+          } catch (err2) {
+            console.error("[worker] complete failed:", err2.message);
+          }
+          continue;
         }
-        continue;
       }
 
       if (typeof cwd === "string") {
@@ -279,9 +298,10 @@ export function startWorker() {
         // Trust a workspace only the first time we execute in that directory.
         if (!trustedWorkspaces.has(cwd)) workspaceToTrust = cwd;
         const trustArgs = workspaceToTrust ? "--trust" : "";
+        // --trust only works in headless print mode, so we always include --print.
         commandText = `CI=1 NO_COLOR=1 TERM=dumb ${agentBin} ${trustArgs} --workspace ${shellQuote(
           cwd
-        )} -p ${shellQuote(promptText)} --output-format text`;
+        )} -p ${shellQuote(promptText)} --print --output-format text`;
       } else if (provider === "claude") {
         commandText = `claude -p ${shellQuote(promptText)}`;
       } else if (provider === "shell") {

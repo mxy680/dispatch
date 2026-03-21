@@ -28,6 +28,15 @@ async function init() {
 
   const cfg = await window.dispatchCompanion.getConfig();
   const paired = Boolean(cfg?.deviceToken && cfg?.deviceId);
+  let basePath = null;
+  if (paired) {
+    try {
+      basePath = await window.dispatchCompanion.getProjectBasePath();
+    } catch {
+      basePath = null;
+    }
+  }
+  const hasBasePath = Boolean(String(basePath ?? "").trim());
 
   // Always show pairing + reset — a saved token can be stale (401) and users must re-pair.
   $id("pairCard").style.display = "block";
@@ -36,12 +45,14 @@ async function init() {
   }
 
   $id("tokenCard").style.display = paired ? "block" : "none";
-  $id("setupCard").style.display = paired ? "block" : "none";
+  $id("basePathCard").style.display = paired ? "block" : "none";
+  $id("setupCard").style.display = paired && hasBasePath ? "block" : "none";
+  if ($id("projectBasePath")) $id("projectBasePath").value = String(basePath ?? "");
 
   $id("deviceId").textContent = cfg?.deviceId ?? "-";
   $id("deviceToken").textContent = cfg?.deviceToken ?? "-";
 
-  if (paired) {
+  if (paired && hasBasePath) {
     try {
       await refreshProjects();
     } catch (e) {
@@ -50,6 +61,8 @@ async function init() {
         `${msg}\n\nIf you see 401 / Invalid device token: click **Reset connection**, then create a new pairing code in the web app and pair again. Also confirm Backend URL matches your server.`
       );
     }
+  } else if (paired && !hasBasePath) {
+    setStatus("Set and save 'New Projects Location' first. Then project linking and command execution will be enabled.");
   }
 }
 
@@ -174,6 +187,29 @@ window.addEventListener("DOMContentLoaded", () => {
       setStatus("Token copied to clipboard.");
     } catch (e) {
       setStatus(`Copy failed: ${String(e?.message ?? e)}`);
+    }
+  });
+
+  $id("chooseBasePathBtn").addEventListener("click", async () => {
+    try {
+      const selected = await window.dispatchCompanion.selectProjectDirectory();
+      if (!selected) return;
+      $id("projectBasePath").value = selected;
+    } catch (e) {
+      setStatus(`Base path selection failed: ${String(e?.message ?? e)}`);
+    }
+  });
+
+  $id("saveBasePathBtn").addEventListener("click", async () => {
+    try {
+      const basePath = $id("projectBasePath").value.trim();
+      if (!basePath) throw new Error("Base path is required");
+      setStatus("Saving project base path...");
+      await window.dispatchCompanion.setProjectBasePath({ basePath });
+      setStatus("Base path saved. Loading projects...");
+      await init();
+    } catch (e) {
+      setStatus(`Failed to save base path: ${String(e?.message ?? e)}`);
     }
   });
 

@@ -150,8 +150,29 @@
         </div>
       </div>
 
+      <div class="card" id="basePathCard" style="display: none;">
+        <h1>3) New Projects Location (required)</h1>
+        <div class="small" style="margin-bottom: 10px;">
+          Set one absolute folder where newly created projects should live. This is required before linking/running.
+        </div>
+        <div class="row">
+          <div style="flex: 1;">
+            <label>Absolute base path</label>
+            <input id="projectBasePath" placeholder="/absolute/path/to/projects" style="min-width: 420px;" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="chooseBasePathBtn">Choose Folder</button>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button class="primary" id="saveBasePathBtn">Save Path</button>
+          </div>
+        </div>
+      </div>
+
       <div class="card" id="setupCard" style="display: none;">
-        <h1>3) Link Local Project Folders</h1>
+        <h1>4) Link Local Project Folders</h1>
         <div class="row" style="margin-top: 12px;">
           <button class="primary" id="autoLinkBtn">Link missing projects</button>
           <div class="small">

@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     phone_number TEXT,
     default_project TEXT,
     default_provider TEXT DEFAULT 'cursor',
+    project_base_path TEXT, -- absolute folder where new projects should live on the user's machine
     terminal_access_granted INTEGER DEFAULT 0,
     voice_speed TEXT DEFAULT 'normal',
     email_notifications INTEGER DEFAULT 1,

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 import logging
+import os
+import re
 
 logger = logging.getLogger("callstack.db")
 
@@ -49,6 +51,9 @@ def create_project(user_id, name, file_path=None):
     """Create a new project for a user."""
     conn = get_db_connection()
     project_id = str(uuid.uuid4())
+
+    if file_path is None:
+        file_path = compute_default_project_file_path(get_project_base_path_for_user(user_id), name)
     
     conn.execute(
         "INSERT INTO projects (id, user_id, name, file_path) VALUES (?, ?, ?, ?)",
@@ -56,6 +61,11 @@ def create_project(user_id, name, file_path=None):
     )
     conn.commit()
     conn.close()
+
+    # Ensure companion devices can claim this project's local folder.
+    if file_path:
+        link_device_project_local_path_if_missing_for_user_devices(user_id=user_id, project_id=project_id, local_path=file_path)
+
     logger.debug("create_project id=%s user_id=%s", project_id, user_id)
     return project_id
 
@@ -106,6 +116,7 @@ def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = N
     """
     existing = get_project_by_name(user_id, name)
     if existing:
+        # If caller provided file_path, use it.
         if file_path and (existing.get("file_path") != file_path):
             conn = get_db_connection()
             conn.execute(
@@ -115,6 +126,26 @@ def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = N
             conn.commit()
             conn.close()
             existing["file_path"] = file_path
+        # If file_path still missing, try computing from user base path.
+        if not existing.get("file_path"):
+            computed = compute_default_project_file_path(get_project_base_path_for_user(user_id), name)
+            if computed:
+                conn = get_db_connection()
+                conn.execute(
+                    "UPDATE projects SET file_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+                    (computed, existing["id"]),
+                )
+                conn.commit()
+                conn.close()
+                existing["file_path"] = computed
+
+        # If we now have a file_path, ensure devices can claim it (but don't override non-empty local_path).
+        if existing.get("file_path"):
+            link_device_project_local_path_if_missing_for_user_devices(
+                user_id=user_id,
+                project_id=existing["id"],
+                local_path=existing["file_path"],
+            )
         return existing
 
     project_id = create_project(user_id, name, file_path=file_path)
@@ -201,6 +232,51 @@ def set_terminal_access_for_user(user_id: str, granted: bool) -> None:
 def get_terminal_access_for_user(user_id: str) -> bool:
     prefs = get_user_preferences(user_id)
     return bool(prefs.get("terminal_access_granted"))
+
+# ==================== PROJECT BASE PATH ====================
+
+def get_project_base_path_for_user(user_id: str) -> str | None:
+    prefs = get_user_preferences(user_id)
+    base_path = prefs.get("project_base_path")
+    if not base_path:
+        return None
+    base_path = str(base_path).strip()
+    return base_path if base_path else None
+
+
+def set_project_base_path_for_user(user_id: str, base_path: str | None) -> None:
+    _ensure_user_preferences_row(user_id)
+    base_path = (base_path or "").strip()
+    conn = get_db_connection()
+    if not base_path:
+        conn.execute("UPDATE user_preferences SET project_base_path = NULL WHERE user_id = ?", (user_id,))
+    else:
+        # Store as-is; worker will create folders locally.
+        conn.execute("UPDATE user_preferences SET project_base_path = ? WHERE user_id = ?", (base_path, user_id))
+    conn.commit()
+    conn.close()
+
+
+def _safe_project_folder_name(name: str) -> str:
+    # Convert a project name into a filesystem-friendly folder name.
+    n = (name or "").strip()
+    if not n:
+        n = "Project"
+    # Avoid path traversal and invalid separators.
+    n = n.replace("\\", "-").replace("/", "-")
+    n = re.sub(r"[^A-Za-z0-9._-]+", "-", n)
+    n = n.strip("-") or "Project"
+    return n
+
+
+def compute_default_project_file_path(base_path: str | None, project_name: str) -> str | None:
+    if not base_path:
+        return None
+    base_path = str(base_path).strip()
+    if not base_path or not os.path.isabs(base_path):
+        return None
+    safe_name = _safe_project_folder_name(project_name)
+    return os.path.join(base_path, safe_name)
 
 # ==================== TASKS ====================
 
@@ -1154,6 +1230,55 @@ def link_device_project(*, device_id: str, project_id: str, local_path: str | No
     return {"id": link_id, "device_id": device_id, "project_id": project_id, "local_path": local_path}
 
 
+def _link_device_project_local_path_if_missing(*, device_id: str, project_id: str, local_path: str) -> None:
+    """
+    Set device_project_links.local_path to `local_path` only when it's currently empty/missing.
+    This avoids overwriting user-customized local paths.
+    """
+    conn = get_db_connection()
+    existing = conn.execute(
+        """
+        SELECT id, local_path
+        FROM device_project_links
+        WHERE device_id = ? AND project_id = ?
+        LIMIT 1
+        """,
+        (device_id, project_id),
+    ).fetchone()
+
+    if existing:
+        row = dict(existing)
+        if not row.get("local_path"):
+            conn.execute(
+                "UPDATE device_project_links SET local_path = ? WHERE id = ?",
+                (local_path, row["id"]),
+            )
+            conn.commit()
+        conn.close()
+        return
+
+    link_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO device_project_links (id, device_id, project_id, local_path)
+        VALUES (?, ?, ?, ?)
+        """,
+        (link_id, device_id, project_id, local_path),
+    )
+    conn.commit()
+    conn.close()
+
+
+def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, project_id: str, local_path: str) -> None:
+    devices = list_devices_for_user(user_id)
+    for d in devices:
+        _link_device_project_local_path_if_missing(
+            device_id=d["id"],
+            project_id=project_id,
+            local_path=local_path,
+        )
+
+
 def get_device_project_links(device_id: str) -> list[dict]:
     conn = get_db_connection()
     rows = conn.execute(
@@ -1218,6 +1343,10 @@ def delete_user_history(user_id: str) -> dict:
     conn = get_db_connection()
     try:
         counts = {}
+        counts["projects"] = conn.execute(
+            "SELECT COUNT(*) FROM projects WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
         # terminal_logs via join to commands
         counts["terminal_logs"] = conn.execute(
             """
@@ -1355,6 +1484,11 @@ def delete_user_history(user_id: str) -> dict:
             (user_id,),
         ).fetchone()[0]
         conn.execute("DELETE FROM companion_devices WHERE user_id = ?", (user_id,))
+
+        # Finally remove the user's projects. By this point, all dependent rows
+        # (tasks, terminal_sessions/commands/logs, instances, and device/cursor context)
+        # have already been deleted to satisfy foreign key constraints.
+        conn.execute("DELETE FROM projects WHERE user_id = ?", (user_id,))
 
         conn.commit()
         return counts

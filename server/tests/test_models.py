@@ -35,6 +35,13 @@ class TestProjects:
         result = models.get_project_by_name("user-1", "Shared Name")
         assert result["user_id"] == "user-1"
 
+    def test_create_project_uses_user_project_base_path(self, test_db):
+        models.set_project_base_path_for_user("user-1", "/tmp/dispatch-projects")
+        pid = models.create_project("user-1", "My App")
+        project = models.get_project_by_id(pid)
+        assert project is not None
+        assert project["file_path"] == "/tmp/dispatch-projects/My-App"
+
 
 class TestTasks:
     def test_create_task(self, test_db):
@@ -94,3 +101,25 @@ class TestCallSessions:
         assert len(history) == 1
         assert history[0]["transcript"] == "hello world"
         assert history[0]["ended_at"] is not None
+
+
+class TestDeleteUserHistory:
+    def test_delete_history_deletes_user_projects_only(self, test_db):
+        # user-1 projects + tasks
+        p1 = models.create_project("user-1", "Project 1")
+        p2 = models.create_project("user-1", "Project 2")
+        models.create_task(p1, "user-1", "Task A")
+        models.create_task(p2, "user-1", "Task B")
+
+        # user-2 project + task (should remain)
+        p3 = models.create_project("user-2", "Project 3")
+        models.create_task(p3, "user-2", "Task C")
+
+        counts = models.delete_user_history("user-1")
+        assert counts["projects"] == 2
+
+        assert models.get_project_by_id(p1) is None
+        assert models.get_project_by_id(p2) is None
+        remaining = models.get_project_by_id(p3)
+        assert remaining is not None
+        assert remaining["user_id"] == "user-2"

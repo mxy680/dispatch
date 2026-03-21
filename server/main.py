@@ -296,6 +296,10 @@ class UpdateProviderPreferenceRequest(BaseModel):
     provider: Literal["cursor", "claude", "shell"]
 
 
+class UpdateProjectBasePathRequest(BaseModel):
+    base_path: str | None = None
+
+
 class UnifiedCommandRequest(BaseModel):
     project_id: str
     prompt: str
@@ -427,6 +431,34 @@ async def set_provider_preference(
     return {"success": True, "provider": request.provider}
 
 
+@app.get("/api/settings/project-base-path")
+async def get_project_base_path(user: dict = Depends(get_current_user)):
+    return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
+
+
+@app.put("/api/settings/project-base-path")
+async def set_project_base_path(
+    request: UpdateProjectBasePathRequest,
+    user: dict = Depends(get_current_user),
+):
+    models.set_project_base_path_for_user(user.id, request.base_path)
+    return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
+
+
+@app.get("/api/settings/project-base-path")
+async def get_project_base_path(user: dict = Depends(get_current_user)):
+    return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
+
+
+@app.put("/api/settings/project-base-path")
+async def set_project_base_path(
+    request: UpdateProjectBasePathRequest,
+    user: dict = Depends(get_current_user),
+):
+    models.set_project_base_path_for_user(user.id, request.base_path)
+    return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
+
+
 @app.post("/api/device/pair/start")
 async def start_device_pairing(request: DevicePairStartRequest, user: dict = Depends(get_current_user)):
     models.upsert_user(
@@ -451,8 +483,13 @@ async def complete_device_pairing(request: DevicePairCompleteRequest):
     user_id = result["user_id"]
     device_id = result["device_id"]
     user_projects = models.get_user_projects(user_id)
+    base_path = models.get_project_base_path_for_user(user_id)
     for proj in user_projects:
-        models.link_device_project(device_id=device_id, project_id=proj["id"])
+        local_path = proj.get("file_path") or models.compute_default_project_file_path(base_path, proj.get("name") or "")
+        if local_path:
+            models.link_device_project(device_id=device_id, project_id=proj["id"], local_path=local_path)
+        else:
+            models.link_device_project(device_id=device_id, project_id=proj["id"])
     logger.info(
         "device paired device_id=%s user_id=%s auto_linked_projects=%s",
         device_id, user_id, len(user_projects),
@@ -491,6 +528,20 @@ async def list_device_projects(device_id: str, user: dict = Depends(get_current_
 async def list_my_device_projects(device: dict = Depends(get_current_device)):
     """Device-token authenticated: returns project links for the calling device."""
     return {"success": True, "links": models.get_device_project_links(device["id"])}
+
+
+@app.get("/api/device/settings/project-base-path")
+async def get_device_project_base_path(device: dict = Depends(get_current_device)):
+    return {"success": True, "base_path": models.get_project_base_path_for_user(device["user_id"])}
+
+
+@app.put("/api/device/settings/project-base-path")
+async def set_device_project_base_path(
+    request: UpdateProjectBasePathRequest,
+    device: dict = Depends(get_current_device),
+):
+    models.set_project_base_path_for_user(device["user_id"], request.base_path)
+    return {"success": True, "base_path": models.get_project_base_path_for_user(device["user_id"])}
 
 
 @app.post("/api/device/link-project")

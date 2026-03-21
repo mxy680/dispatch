@@ -73,3 +73,13 @@ export async function linkProjectByName(projectName, localPath) {
     local_path: localPath,
   });
 }
+
+export async function getDeviceProjectBasePath() {
+  return request("GET", "/api/device/settings/project-base-path");
+}
+
+export async function setDeviceProjectBasePath(basePath) {
+  return request("PUT", "/api/device/settings/project-base-path", {
+    base_path: basePath ?? null,
+  });
+}

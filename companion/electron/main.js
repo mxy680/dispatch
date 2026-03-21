@@ -7,7 +7,7 @@ import { startWorker } from "../src/worker.js";
 import { pairDevice } from "../src/pair.js";
 import { loadConfig } from "../src/config.js";
 import { resetConfig } from "../src/config.js";
-import { getMyProjectLinks, linkProjectByName } from "../src/api.js";
+import { getMyProjectLinks, linkProjectByName, getDeviceProjectBasePath, setDeviceProjectBasePath } from "../src/api.js";
 import { execSync } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,11 +79,20 @@ ipcMain.handle("dispatch.get-linked-projects", async () => {
   return result?.links ?? [];
 });
 
+ipcMain.handle("dispatch.get-project-base-path", async () => {
+  const result = await getDeviceProjectBasePath();
+  return result?.base_path ?? null;
+});
+
+ipcMain.handle("dispatch.set-project-base-path", async (_event, { basePath }) => {
+  const result = await setDeviceProjectBasePath(basePath);
+  return result?.base_path ?? null;
+});
+
 ipcMain.handle("dispatch.open-cursor", async (_event, { folderPath }) => {
   if (!folderPath || !String(folderPath).trim()) throw new Error("folderPath is required");
+  const fp = String(folderPath).trim().replace(/"/g, '\\"');
   try {
-    const fp = String(folderPath).trim().replace(/"/g, '\\"');
-
     // Try calling cursor directly (if Cursor is available on PATH for this app).
     try {
       const resolved = execSync("command -v cursor 2>/dev/null || which cursor 2>/dev/null", {
@@ -98,12 +107,21 @@ ipcMain.handle("dispatch.open-cursor", async (_event, { folderPath }) => {
         return { success: true };
       }
     } catch {
-      // ignore; we'll fallback to `open -a Cursor`
+      // ignore; we'll fallback to `open -a`
     }
 
     // macOS fallback: open the Cursor app with the folder.
-    execSync(`open -a "Cursor" --args "${fp}"`, { stdio: "ignore", shell: true });
-    return { success: true };
+    const candidates = ["Cursor", "Cursor.app"];
+    for (const appName of candidates) {
+      try {
+        execSync(`open -a "${appName}" --args "${fp}"`, { stdio: "ignore", shell: true });
+        return { success: true };
+      } catch {
+        // try next candidate
+      }
+    }
+
+    throw new Error("Could not launch Cursor (no cursor binary and open -a failed)");
   } catch (err) {
     return { success: false, error: String(err?.message ?? err) };
   }

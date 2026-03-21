@@ -150,6 +150,7 @@ def _run_migrations(conn: sqlite3.Connection):
     if "user_preferences" in existing_tables:
         _ensure_column(conn, "user_preferences", "default_provider", "TEXT DEFAULT 'cursor'")
         _ensure_column(conn, "user_preferences", "terminal_access_granted", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "user_preferences", "project_base_path", "TEXT")
 
     if "companion_devices" not in existing_tables:
         conn.execute("""
