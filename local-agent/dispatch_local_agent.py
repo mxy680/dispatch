@@ -228,6 +228,21 @@ def main() -> int:
                 exit_code = 1
         else:
             # Execute command (non-interactive) inside the session cwd.
+            # Ensure full user PATH is available (nohup can strip it).
+            env = os.environ.copy()
+            home = os.path.expanduser("~")
+            extra_paths = [
+                f"{home}/.local/bin",
+                f"{home}/.cargo/bin",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+            ]
+            current_path = env.get("PATH", "")
+            for p in extra_paths:
+                if p not in current_path:
+                    current_path = f"{p}:{current_path}"
+            env["PATH"] = current_path
+
             proc = subprocess.Popen(
                 command_text,
                 cwd=cwd,
@@ -235,6 +250,7 @@ def main() -> int:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
             )
             stdout, stderr = proc.communicate()
             exit_code = int(proc.returncode or 0)

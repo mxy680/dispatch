@@ -10,6 +10,7 @@ Supported providers:
 from __future__ import annotations
 
 import shlex
+import shutil
 
 _PROVIDER_ALIASES: dict[str, str] = {
     "cursor": "cursor",
@@ -49,10 +50,12 @@ def build_provider_command(*, provider: str, prompt: str) -> str:
     safe_prompt = shlex.quote(prompt)
 
     if provider == "cursor":
-        return f"cursor --cli agent -p {safe_prompt} --output-format text"
+        cursor_bin = shutil.which("cursor") or "cursor"
+        return f"{cursor_bin} --cli agent -p {safe_prompt} --output-format text"
 
     if provider == "claude":
-        return f"claude -p {safe_prompt}"
+        claude_bin = shutil.which("claude") or "claude"
+        return f"{claude_bin} -p {safe_prompt}"
 
     # shell: pass the prompt as a raw command
     return prompt
