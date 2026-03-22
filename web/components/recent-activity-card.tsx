@@ -83,7 +83,7 @@ export function RecentActivityCard({ activity }: { activity: ActivityItem[] }) {
                       <Badge variant="outline" className={`text-[10px] border ${statusBadge(a.status)}`}>
                         {a.status}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      <span className="text-[10px] text-muted-foreground whitespace-nowrap" suppressHydrationWarning>
                         {timeAgo(a.time)}
                       </span>
                     </div>
