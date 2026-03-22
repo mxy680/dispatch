@@ -64,8 +64,8 @@ export default async function DashboardPage() {
   const recentCommands = cmdJson.commands ?? [];
 
   const activity = [
-    ...tasks.map((t) => ({ id: t.id, label: t.description, project: t.project_name, status: t.status, time: t.created_at, type: "task" as const })),
-    ...recentCommands.map((c) => ({ id: c.id, label: c.user_prompt || c.command, project: c.project_name, status: c.status, time: c.created_at, type: "command" as const })),
+    ...tasks.map((t) => ({ id: t.id, label: t.description, project: t.project_name ?? null, status: t.status, time: t.created_at, type: "task" as const })),
+    ...recentCommands.map((c) => ({ id: c.id, label: c.user_prompt || c.command, project: c.project_name ?? null, status: c.status, time: c.created_at, type: "command" as const })),
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 20);
 
   return (
