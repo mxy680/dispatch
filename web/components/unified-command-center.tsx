@@ -67,6 +67,9 @@ export function UnifiedCommandCenter({
 
   const [commands, setCommands] = useState<TimelineCommand[]>([]);
   const [activeCommandId, setActiveCommandId] = useState<string>("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -149,6 +152,16 @@ export function UnifiedCommandCenter({
   };
 
   const noProjects = projects.length === 0;
+
+  if (!mounted) {
+    return (
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          <div className="h-[52px]" />
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (noProjects) {
     return (
