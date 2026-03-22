@@ -1131,19 +1131,18 @@ async def register_local_agent(
     project_id = request.project_id
     if project_id:
         _require_project_owner(agent_user_id, project_id)
-    else:
+    elif request.project_path is not None:
         # Create (or reuse) project automatically for minimal user friction
         inferred_name = (request.project_name or "").strip()
-        if not inferred_name and request.project_path:
-            inferred_name = os.path.basename(request.project_path.rstrip("/")) or "Local Project"
         if not inferred_name:
-            inferred_name = "Local Project"
+            inferred_name = os.path.basename(request.project_path.rstrip("/")) or "Local Project"
         project = models.upsert_project_by_name(
             user_id=agent_user_id,
             name=inferred_name,
             file_path=request.project_path,
         )
         project_id = project["id"]
+    # else: neither project_id nor project_path provided — register as project-agnostic instance
 
     row = models.register_instance(
         user_id=agent_user_id,
@@ -1241,7 +1240,7 @@ async def create_terminal_session(request: CreateTerminalSessionRequest, user: d
 
     instance_id = request.instance_id
     if not instance_id:
-        active = models.get_active_instances_for_project(request.project_id, within_seconds=120)
+        active = models.get_active_instances_for_user(user.id, within_seconds=120)
         instance_id = active[0]["id"] if active else None
 
     session_id = models.create_terminal_session(
@@ -1265,13 +1264,11 @@ async def close_terminal_session(session_id: str, user: dict = Depends(get_curre
 async def create_terminal_command(session_id: str, request: CreateTerminalCommandRequest, user: dict = Depends(get_current_user)):
     session = _require_terminal_session_owner(user.id, session_id)
     if not session.get("instance_id"):
-        # Try to auto-bind to latest active instance for this project.
-        project_id = session.get("project_id")
-        if project_id:
-            active = models.get_active_instances_for_project(project_id, within_seconds=180)
-            if active:
-                models.bind_terminal_session_instance(session_id, active[0]["id"])
-                session = _require_terminal_session_owner(user.id, session_id)
+        # Try to auto-bind to latest active instance for this user.
+        active = models.get_active_instances_for_user(user.id, within_seconds=180)
+        if active:
+            models.bind_terminal_session_instance(session_id, active[0]["id"])
+            session = _require_terminal_session_owner(user.id, session_id)
         if not session.get("instance_id"):
             raise HTTPException(status_code=409, detail="No local agent connected for this session")
     provider = (request.provider or models.get_default_provider_for_user(user.id)).strip().lower()

@@ -503,7 +503,7 @@ def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
 def register_instance(
     *,
     user_id: str,
-    project_id: str,
+    project_id: str | None = None,
     instance_token: str | None = None,
     pid: int | None = None,
     status: str = "starting",
@@ -515,7 +515,7 @@ def register_instance(
         res = (
             sb.table("instances")
             .select("*")
-            .eq("project_id", project_id)
+            .eq("user_id", user_id)
             .eq("instance_token", instance_token)
             .limit(1)
             .maybe_single()
@@ -533,18 +533,22 @@ def register_instance(
         }
         if pid is not None:
             update_data["pid"] = pid
+        if project_id is not None:
+            update_data["project_id"] = project_id
         sb.table("instances").update(update_data).eq("id", instance_id).execute()
     else:
         instance_id = str(uuid.uuid4())
-        sb.table("instances").insert({
+        insert_data: dict = {
             "id": instance_id,
             "user_id": user_id,
-            "project_id": project_id,
             "pid": pid,
             "instance_token": instance_token,
             "metadata": json.dumps(metadata or {}),
             "status": status,
-        }).execute()
+        }
+        if project_id is not None:
+            insert_data["project_id"] = project_id
+        sb.table("instances").insert(insert_data).execute()
 
     res = sb.table("instances").select("*").eq("id", instance_id).maybe_single().execute()
     return (res.data if res else None) or {"id": instance_id}
@@ -572,6 +576,21 @@ def get_active_instances_for_project(project_id: str, within_seconds: int = 60) 
         sb.table("instances")
         .select("*")
         .eq("project_id", project_id)
+        .gte("last_heartbeat", cutoff)
+        .order("last_heartbeat", desc=True)
+        .execute()
+    )
+    return res.data or []
+
+
+def get_active_instances_for_user(user_id: str, within_seconds: int = 60) -> list[dict]:
+    sb = get_sb()
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=within_seconds)).isoformat()
+    res = (
+        sb.table("instances")
+        .select("*")
+        .eq("user_id", user_id)
         .gte("last_heartbeat", cutoff)
         .order("last_heartbeat", desc=True)
         .execute()
@@ -698,7 +717,7 @@ def get_or_create_terminal_session_for_project(
     name: str = "Unified Session",
     within_seconds: int = 180,
 ) -> dict:
-    active = get_active_instances_for_project(project_id, within_seconds=within_seconds)
+    active = get_active_instances_for_user(user_id, within_seconds=within_seconds)
     instance_id = active[0]["id"] if active else None
 
     sb = get_sb()

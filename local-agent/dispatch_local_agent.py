@@ -44,7 +44,7 @@ class Config:
     backend_url: str
     project_id: str | None
     project_name: str | None
-    project_path: str
+    project_path: str | None
     auth_token: str | None
     agent_token: str | None
     instance_token: str
@@ -100,7 +100,7 @@ def main() -> int:
     parser.add_argument("--backend-url", required=True, help="Backend base URL, e.g. http://localhost:8000")
     parser.add_argument("--project-id", default=None, help="Project id (optional; backend can auto-create)")
     parser.add_argument("--project-name", default=None, help="Project name (optional; defaults to folder name)")
-    parser.add_argument("--project-path", required=True, help="Absolute path to the local project directory")
+    parser.add_argument("--project-path", default=None, help="Absolute path to the local project directory")
     parser.add_argument("--auth-token", default=None, help="Supabase access token (JWT)")
     parser.add_argument("--agent-token", default=None, help="Dispatch agent token (from Settings)")
     parser.add_argument(
@@ -110,12 +110,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    project_path = os.path.abspath(args.project_path)
-    if not os.path.isdir(project_path):
+    project_path = os.path.abspath(args.project_path) if args.project_path else None
+    if project_path is not None and not os.path.isdir(project_path):
         print(f"[local-agent] ERROR: project path not found: {project_path}", file=sys.stderr)
         return 2
 
-    instance_token = args.instance_token or f"{os.uname().nodename}-{args.project_id}"
+    instance_token = args.instance_token or os.uname().nodename
     cfg = Config(
         backend_url=args.backend_url.rstrip("/"),
         project_id=args.project_id,
@@ -128,23 +128,28 @@ def main() -> int:
 
     print(f"[local-agent] backend={cfg.backend_url} project_id={cfg.project_id} project_path={cfg.project_path}")
 
-    # Register instance
+    # Register instance — only include project fields when present
+    reg_body: dict[str, Any] = {
+        "instance_token": cfg.instance_token,
+        "pid": os.getpid(),
+        "metadata": {
+            "hostname": os.uname().nodename,
+            "platform": sys.platform,
+            "cwd": os.getcwd(),
+        },
+    }
+    if cfg.project_id is not None:
+        reg_body["project_id"] = cfg.project_id
+    if cfg.project_name is not None:
+        reg_body["project_name"] = cfg.project_name
+    if cfg.project_path is not None:
+        reg_body["project_path"] = cfg.project_path
+        reg_body["metadata"]["project_path"] = cfg.project_path
+
     reg = _http_json(
         method="POST",
         url=f"{cfg.backend_url}/api/agent/local/register",
-        body={
-            "project_id": cfg.project_id,
-            "project_name": cfg.project_name,
-            "project_path": cfg.project_path,
-            "instance_token": cfg.instance_token,
-            "pid": os.getpid(),
-            "metadata": {
-                "hostname": os.uname().nodename,
-                "platform": sys.platform,
-                "cwd": os.getcwd(),
-                "project_path": cfg.project_path,
-            },
-        },
+        body=reg_body,
         auth_token=cfg.auth_token,
         agent_token=cfg.agent_token,
     )
@@ -209,12 +214,12 @@ def main() -> int:
 
         idle_polls = 0
 
-        # Use project_path from the command if available (supports multi-project).
-        cmd_project_path = cmd.get("project_path") or cfg.project_path
+        # Use project_path from the command if available, then cfg, then home directory.
+        cmd_project_path = cmd.get("project_path") or cfg.project_path or os.path.expanduser("~")
         if cmd_project_path and os.path.isdir(cmd_project_path):
             effective_project_path = cmd_project_path
         else:
-            effective_project_path = cfg.project_path
+            effective_project_path = cfg.project_path or os.path.expanduser("~")
             if cmd_project_path and not os.path.isdir(cmd_project_path):
                 os.makedirs(cmd_project_path, exist_ok=True)
                 effective_project_path = cmd_project_path
@@ -228,8 +233,10 @@ def main() -> int:
 
         try:
             # Make `cd` persistent across commands (Cursor-like terminal semantics).
+            # When there is no fixed project root, use the effective path as the boundary.
+            cd_root = cfg.project_path or effective_project_path
             if _is_cd_command(command_text):
-                ok, new_cwd, msg = _apply_cd(command_text, cwd, cfg.project_path)
+                ok, new_cwd, msg = _apply_cd(command_text, cwd, cd_root)
                 if ok:
                     session_cwd[session_id] = new_cwd
                     stdout = msg
