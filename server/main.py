@@ -843,6 +843,14 @@ async def telegram_webhook(
     background_tasks: BackgroundTasks
 ):
     """Receives updates from Telegram bot."""
+    # Security: check secret token if configured
+    expected_token = os.environ.get("TELEGRAM_SECRET_TOKEN")
+    if expected_token:
+        provided_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if provided_token != expected_token:
+            logger.warning("telegram_webhook: unauthorized access attempt (invalid secret token)")
+            return {"status": "unauthorized"}
+
     try:
         data = await request.json()
         logger.info("telegram_webhook received payload")
@@ -874,9 +882,9 @@ async def telegram_webhook(
             user_id = pseudo_user_id
             await send_telegram_message(
                 chat_id, 
-                "Welcome to Dispatch! I've created a new account for you. Try saying 'create a project called my-app'."
+                "Welcome to Dispatch! I've created a new account for you. Processing your command now..."
             )
-            return {"status": "success", "action": "user_created"}
+            # return {"status": "success", "action": "user_created"}
             
         # 2. Re-use the existing transcribe_text logic for intent parsing
         user_projects = models.get_user_projects(user_id)
