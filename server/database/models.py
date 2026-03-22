@@ -38,6 +38,31 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
     logger.debug("upsert_user user_id=%s email=%r phone=%r", user_id, email, phone_number)
 
 
+def update_user_phone_number(user_id: str, phone_number: str) -> None:
+    """Update the phone_number column for a user row.
+
+    Raises ValueError if the phone number is already linked to another account.
+    """
+    sb = get_sb()
+    try:
+        sb.table("users").update({"phone_number": phone_number}).eq("id", user_id).execute()
+        logger.debug("update_user_phone_number user_id=%s phone=%r", user_id, phone_number)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "unique" in err_str or "duplicate" in err_str or "23505" in err_str:
+            raise ValueError("This phone number is already linked to another account")
+        raise
+
+
+def get_user_phone_number(user_id: str) -> str | None:
+    """Return the phone_number for a user, or None if not set."""
+    sb = get_sb()
+    result = sb.table("users").select("phone_number").eq("id", user_id).maybe_single().execute()
+    if result and result.data:
+        return result.data.get("phone_number")
+    return None
+
+
 # ==================== PROJECTS ====================
 
 def create_project(user_id, name, file_path=None):

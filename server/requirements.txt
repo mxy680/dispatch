@@ -5,3 +5,4 @@ python-multipart          # Required for file uploads
 supabase                  # To validate the user's token
 openai>=1.0.0             # Groq API (OpenAI-compatible client)
 httpx                     # Async HTTP client (Twilio audio download)
+twilio                    # Twilio Verify API for SMS OTP
