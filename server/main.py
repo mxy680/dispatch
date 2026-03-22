@@ -1429,7 +1429,7 @@ async def twilio_recording(request: Request, background_tasks: BackgroundTasks):
         # Create a task from the voice command
         logged_task_id = None
         if intent_type != "unknown":
-            logged_task_id = models.log_task(
+            logged_task_id = models.log_agent_event_task(
                 user_id=user_id,
                 project_name=project_name,
                 projects=user_projects,
