@@ -10,7 +10,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TerminalAccessToggle } from "@/components/terminal-access-toggle";
 import { UnifiedCommandCenter } from "@/components/unified-command-center";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { DeleteProjectButton } from "@/components/delete-project-button";
@@ -57,7 +56,6 @@ export default async function DashboardPage() {
   const projects = dashJson.projects ?? [];
   const tasks = dashJson.tasks ?? [];
 
-  // Also fetch recent commands for the activity feed
   const cmdRes = await fetch(`${backendUrl}/api/unified/timeline?limit=20`, {
     cache: "no-store",
     headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
@@ -65,29 +63,22 @@ export default async function DashboardPage() {
   const cmdJson = (await cmdRes.json()) as { commands?: { id: string; user_prompt?: string; command: string; status: string; provider?: string; project_name?: string; created_at: string }[] };
   const recentCommands = cmdJson.commands ?? [];
 
-  // Merge tasks + commands into one activity feed, sorted by time
   const activity = [
     ...tasks.map((t) => ({ id: t.id, label: t.description, project: t.project_name, status: t.status, time: t.created_at, type: "task" as const })),
     ...recentCommands.map((c) => ({ id: c.id, label: c.user_prompt || c.command, project: c.project_name, status: c.status, time: c.created_at, type: "command" as const })),
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 20);
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-5">
       <DashboardPoller intervalMs={5000} />
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <TerminalAccessToggle userId={user.id} />
-      </div>
-
-      {/* Command Center */}
+      {/* Command Center — the hero of the page */}
       <UnifiedCommandCenter projects={projects.map((p) => ({ id: p.id, name: p.name }))} />
 
-      {/* Projects + Tasks side by side */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Projects */}
-        <Card>
+      {/* Bottom panels */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Projects — narrow left column */}
+        <Card className="lg:col-span-1">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium">Projects</CardTitle>
@@ -96,28 +87,29 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent className="p-0">
             {projects.length === 0 ? (
-              <p className="px-6 py-8 text-sm text-muted-foreground text-center">
-                No projects yet. Use agent mode to create one.
-              </p>
+              <div className="px-6 py-10 text-center">
+                <p className="text-sm text-muted-foreground">No projects yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Create one to get started</p>
+              </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
-                    <TableHead className="text-right w-16">Tasks</TableHead>
-                    <TableHead className="text-right w-16">Done</TableHead>
+                    <TableHead className="text-right w-14">Tasks</TableHead>
+                    <TableHead className="text-right w-14">Done</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {projects.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-medium text-sm">
-                        <div className="flex items-center gap-2">
-                          {p.name}
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate">{p.name}</span>
                           <DeleteProjectButton projectId={p.id} />
                         </div>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-sm">{p.total_tasks ?? 0}</TableCell>
+                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">{p.total_tasks ?? 0}</TableCell>
                       <TableCell className="text-right tabular-nums text-sm text-emerald-400">{p.completed_tasks ?? 0}</TableCell>
                     </TableRow>
                   ))}
@@ -127,7 +119,10 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        <RecentActivityCard activity={activity} />
+        {/* Recent Activity — wider right column */}
+        <div className="lg:col-span-2">
+          <RecentActivityCard activity={activity} />
+        </div>
       </div>
     </div>
   );
