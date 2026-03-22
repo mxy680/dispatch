@@ -275,7 +275,7 @@ export function UnifiedCommandCenter({
             <div className="px-3 py-2 border-b border-border">
               <span className="text-xs font-medium text-muted-foreground">History</span>
             </div>
-            <div className="max-h-[400px] overflow-auto">
+            <div className="max-h-[280px] overflow-auto">
               {commands.map((c) => (
                 <Button
                   key={c.id}
@@ -314,7 +314,7 @@ export function UnifiedCommandCenter({
           <CommandLogViewer
             commandId={activeCommandId}
             commandStatus={activeCommand?.status ?? ""}
-            height="400px"
+            height="280px"
           />
         </div>
       )}
