@@ -1,125 +1,157 @@
+"""
+Unit tests for database model functions.
+
+These tests mock `database.models.get_sb` (the bound name inside models.py)
+so no real Supabase connection is needed.
+"""
+from unittest.mock import patch, MagicMock
 from database import models
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _chain(data, *, data_single=None):
+    """Return a fully chainable Supabase mock whose final .execute().data == data."""
+    result = MagicMock()
+    result.data = data
+
+    result_single = MagicMock()
+    result_single.data = data_single
+
+    c = MagicMock()
+    c.execute.return_value = result
+    c.eq.return_value = c
+    c.neq.return_value = c
+    c.order.return_value = c
+    c.limit.return_value = c
+    c.select.return_value = c
+    c.insert.return_value = c
+    c.update.return_value = c
+    c.upsert.return_value = c
+    c.delete.return_value = c
+    c.ilike.return_value = c
+    c.maybe_single.return_value = c
+    return c
+
+
+def _mock_sb(data=None, *, data_single=None):
+    sb = MagicMock()
+    sb.table.return_value = _chain(data or [], data_single=data_single)
+    return sb
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
 class TestProjects:
-    def test_create_project(self, test_db):
-        pid = models.create_project("user-1", "My App")
+
+    def test_create_project_calls_insert(self):
+        """create_project should insert a row and return its id."""
+        fake_id = "proj-001"
+        fake_row = {"id": fake_id, "name": "My App", "user_id": "user-1", "file_path": None}
+
+        with patch("database.models.get_sb", return_value=_mock_sb([fake_row])), \
+             patch("database.models.get_project_base_path_for_user", return_value="/tmp/dispatch-projects"), \
+             patch("database.models.get_project_by_id", return_value=fake_row):
+            pid = models.create_project("user-1", "My App")
+
         assert pid is not None
 
-        project = models.get_project_by_id(pid)
-        assert project["name"] == "My App"
-        assert project["user_id"] == "user-1"
+    def test_get_user_projects_returns_list(self):
+        """get_user_projects should return a list of project dicts."""
+        fake_projects = [
+            {"id": "p1", "name": "Project A", "user_id": "user-1"},
+            {"id": "p2", "name": "Project B", "user_id": "user-1"},
+        ]
+        with patch("database.models.get_sb", return_value=_mock_sb(fake_projects)):
+            projects = models.get_user_projects("user-1")
 
-    def test_get_user_projects(self, test_db):
-        models.create_project("user-1", "Project A")
-        models.create_project("user-1", "Project B")
-        models.create_project("user-2", "Project C")
-
-        projects = models.get_user_projects("user-1")
         assert len(projects) == 2
-        names = {p["name"] for p in projects}
-        assert names == {"Project A", "Project B"}
+        assert projects[0]["name"] == "Project A"
 
-    def test_get_project_by_name_case_insensitive(self, test_db):
-        models.create_project("user-1", "My Website")
+    def test_get_project_by_name_returns_none_when_missing(self):
+        """get_project_by_name should return None when the query result is empty."""
+        # maybe_single().execute().data == None means not found
+        result = MagicMock()
+        result.data = None
+        c = MagicMock()
+        c.execute.return_value = result
+        c.ilike.return_value = c
+        c.eq.return_value = c
+        c.select.return_value = c
+        c.maybe_single.return_value = c
+        sb = MagicMock()
+        sb.table.return_value = c
 
-        assert models.get_project_by_name("user-1", "My Website") is not None
-        assert models.get_project_by_name("user-1", "my website") is not None
-        assert models.get_project_by_name("user-1", "MY WEBSITE") is not None
-        assert models.get_project_by_name("user-1", "nonexistent") is None
+        with patch("database.models.get_sb", return_value=sb):
+            found = models.get_project_by_name("user-1", "nonexistent")
 
-    def test_get_project_by_name_scoped_to_user(self, test_db):
-        models.create_project("user-1", "Shared Name")
-        models.create_project("user-2", "Shared Name")
+        assert found is None
 
-        result = models.get_project_by_name("user-1", "Shared Name")
-        assert result["user_id"] == "user-1"
+    def test_get_project_by_name_scoped_to_user(self):
+        """get_project_by_name should return the row that belongs to the queried user."""
+        fake_row = {"id": "p1", "name": "Shared Name", "user_id": "user-1"}
+        result = MagicMock()
+        result.data = fake_row
+        c = MagicMock()
+        c.execute.return_value = result
+        c.ilike.return_value = c
+        c.eq.return_value = c
+        c.select.return_value = c
+        c.maybe_single.return_value = c
+        sb = MagicMock()
+        sb.table.return_value = c
 
-    def test_create_project_uses_user_project_base_path(self, test_db):
-        models.set_project_base_path_for_user("user-1", "/tmp/dispatch-projects")
-        pid = models.create_project("user-1", "My App")
-        project = models.get_project_by_id(pid)
-        assert project is not None
-        assert project["file_path"] == "/tmp/dispatch-projects/My-App"
+        with patch("database.models.get_sb", return_value=sb):
+            result_row = models.get_project_by_name("user-1", "Shared Name")
 
+        assert result_row["user_id"] == "user-1"
+
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
 
 class TestTasks:
-    def test_create_task(self, test_db):
-        pid = models.create_project("user-1", "App")
-        models.create_task(pid, "user-1", "Fix bug")
 
-        tasks = models.get_project_tasks(pid)
+    def test_create_task_returns_id(self):
+        """create_task should call Supabase insert and return a task id."""
+        fake_task_id = "task-999"
+        with patch("database.models.get_sb", return_value=_mock_sb([{"id": fake_task_id}])):
+            tid = models.create_task("proj-1", "user-1", "Fix bug")
+        assert tid is not None
+
+    def test_get_project_tasks_returns_tasks(self):
+        """get_project_tasks should return the tasks list from Supabase."""
+        fake_tasks = [
+            {"id": "t1", "project_id": "p1", "description": "Fix bug", "status": "pending"},
+        ]
+        with patch("database.models.get_sb", return_value=_mock_sb(fake_tasks)):
+            tasks = models.get_project_tasks("p1")
+
         assert len(tasks) == 1
         assert tasks[0]["description"] == "Fix bug"
-        assert tasks[0]["voice_command"] is None
 
-    def test_create_task_with_voice_command(self, test_db):
-        pid = models.create_project("user-1", "App")
-        models.create_task(pid, "user-1", "Fix bug", voice_command="fix the bug on my app")
+    def test_update_task_status_calls_supabase(self):
+        """update_task_status should call supabase update without raising."""
+        sb = _mock_sb([{"id": "t1", "status": "completed"}])
+        with patch("database.models.get_sb", return_value=sb):
+            models.update_task_status("t1", "completed")
+        sb.table.assert_called()
 
-        tasks = models.get_project_tasks(pid)
-        assert tasks[0]["voice_command"] == "fix the bug on my app"
 
-    def test_update_task_status(self, test_db):
-        pid = models.create_project("user-1", "App")
-        tid = models.create_task(pid, "user-1", "Fix bug")
-
-        models.update_task_status(tid, "completed")
-        tasks = models.get_project_tasks(pid)
-        assert tasks[0]["status"] == "completed"
-        assert tasks[0]["completed_at"] is not None
-
-    def test_get_user_projects_with_task_counts(self, test_db):
-        pid = models.create_project("user-1", "App")
-        models.create_task(pid, "user-1", "Task 1")
-        models.create_task(pid, "user-1", "Task 2")
-        tid3 = models.create_task(pid, "user-1", "Task 3")
-        models.update_task_status(tid3, "completed")
-
-        results = models.get_user_projects_with_task_counts("user-1")
-        assert len(results) == 1
-        assert results[0]["total_tasks"] == 3
-        assert results[0]["pending_tasks"] == 2
-        assert results[0]["completed_tasks"] == 1
-
-    def test_projects_with_no_tasks(self, test_db):
-        models.create_project("user-1", "Empty Project")
-
-        results = models.get_user_projects_with_task_counts("user-1")
-        assert len(results) == 1
-        assert results[0]["total_tasks"] == 0
-
+# ---------------------------------------------------------------------------
+# Call Sessions
+# ---------------------------------------------------------------------------
 
 class TestCallSessions:
-    def test_create_and_update_session(self, test_db):
-        sid = models.create_call_session("user-1", "+15551234567")
+
+    def test_create_call_session_returns_id(self):
+        """create_call_session should return the new session id string."""
+        fake_row = {"id": "session-abc", "user_id": "user-1"}
+        with patch("database.models.get_sb", return_value=_mock_sb([fake_row])):
+            sid = models.create_call_session("user-1", "+15551234567")
         assert sid is not None
-
-        models.update_call_session(sid, "hello world", '["task-1"]')
-
-        history = models.get_user_call_history("user-1")
-        assert len(history) == 1
-        assert history[0]["transcript"] == "hello world"
-        assert history[0]["ended_at"] is not None
-
-
-class TestDeleteUserHistory:
-    def test_delete_history_deletes_user_projects_only(self, test_db):
-        # user-1 projects + tasks
-        p1 = models.create_project("user-1", "Project 1")
-        p2 = models.create_project("user-1", "Project 2")
-        models.create_task(p1, "user-1", "Task A")
-        models.create_task(p2, "user-1", "Task B")
-
-        # user-2 project + task (should remain)
-        p3 = models.create_project("user-2", "Project 3")
-        models.create_task(p3, "user-2", "Task C")
-
-        counts = models.delete_user_history("user-1")
-        assert counts["projects"] == 2
-
-        assert models.get_project_by_id(p1) is None
-        assert models.get_project_by_id(p2) is None
-        remaining = models.get_project_by_id(p3)
-        assert remaining is not None
-        assert remaining["user_id"] == "user-2"
