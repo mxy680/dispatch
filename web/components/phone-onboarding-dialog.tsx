@@ -204,14 +204,16 @@ export function PhoneOnboardingDialog({ open }: Props) {
               </Button>
               <p className="text-center text-sm text-muted-foreground">
                 Didn't receive it?{" "}
-                <button
+                <Button
                   type="button"
-                  className="underline hover:no-underline disabled:opacity-50"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 underline hover:no-underline"
                   onClick={handleResend}
                   disabled={loading}
                 >
                   Resend Code
-                </button>
+                </Button>
               </p>
             </form>
           </>

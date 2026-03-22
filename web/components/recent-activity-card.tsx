@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CommandLogViewer } from "@/components/command-log-viewer";
 
@@ -98,13 +99,15 @@ export function RecentActivityCard({ activity }: { activity: ActivityItem[] }) {
                   <span className="text-xs text-muted-foreground truncate max-w-[80%]">
                     {selectedItem.label}
                   </span>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => setSelectedCommandId(null)}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-2 shrink-0"
+                    className="ml-2 shrink-0 h-6 w-6"
                     aria-label="Close log viewer"
                   >
                     ✕
-                  </button>
+                  </Button>
                 </div>
                 <CommandLogViewer
                   commandId={selectedCommandId}
