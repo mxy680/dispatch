@@ -69,7 +69,7 @@ export default async function DashboardPage() {
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 20);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-5">
+    <div className="max-w-6xl mx-auto space-y-4">
       <DashboardPoller intervalMs={5000} />
 
       {/* Command Center — the hero of the page */}

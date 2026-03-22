@@ -119,7 +119,7 @@ export function CommandLogViewer({
         )}
       </div>
       <div
-        className="overflow-auto p-3 font-mono text-xs whitespace-pre-wrap text-foreground bg-black/20"
+        className="overflow-auto p-3 font-mono text-xs whitespace-pre-wrap text-foreground bg-muted/50"
         style={{ height }}
       >
         {renderContent()}
