@@ -53,7 +53,7 @@ def dispatch_task(task_id: str, intent_data: dict, terminal_granted: bool) -> di
     user_id = task.get("user_id", "")
     project_id = task.get("project_id")
     project_name = intent_data.get("project_name")
-    task_description = intent_data.get("task_description", "")
+    task_description = intent_data.get("task_description") or task.get("description") or task.get("voice_command") or ""
 
     # Resolve project
     project = None
