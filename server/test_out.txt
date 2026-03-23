@@ -1,0 +1,32 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\Users\paule\dispatch\server
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-1.3.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 4 items
+
+tests\test_telegram.py F...                                              [100%]
+
+================================== FAILURES ===================================
+_________________________ test_send_telegram_message __________________________
+
+mock_telegram_env = None
+
+    @pytest.mark.asyncio
+    async def test_send_telegram_message(mock_telegram_env):
+        """Test that send_telegram_message makes the correct HTTPX call."""
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = AsyncMock()
+    
+            result = await telegram.send_telegram_message(123456789, "Hello World")
+    
+>           assert result is True
+E           assert False is True
+
+tests\test_telegram.py:25: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  callstack.telegram:telegram.py:12 TELEGRAM_BOT_TOKEN not set, cannot send message to 123456789
+=========================== short test summary info ===========================
+FAILED tests/test_telegram.py::test_send_telegram_message - assert False is True
+========================= 1 failed, 3 passed in 3.09s =========================

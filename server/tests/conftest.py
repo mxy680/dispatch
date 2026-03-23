@@ -1,29 +1,48 @@
+"""Shared test fixtures – mocks the Supabase client so tests run without real credentials."""
 import pytest
-import sqlite3
-import os
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+
+def _make_supabase_mock():
+    """Build a chainable Supabase MagicMock that returns empty data by default."""
+    mock_sb = MagicMock()
+
+    class _Result:
+        data = []
+
+    result = _Result()
+
+    # Every chain ends with .execute() or .maybe_single().execute() returning a result object
+    chain = MagicMock()
+    chain.execute.return_value = result
+    chain.maybe_single.return_value = chain
+    chain.eq.return_value = chain
+    chain.neq.return_value = chain
+    chain.order.return_value = chain
+    chain.limit.return_value = chain
+    chain.range.return_value = chain
+    chain.select.return_value = chain
+    chain.insert.return_value = chain
+    chain.update.return_value = chain
+    chain.delete.return_value = chain
+    chain.upsert.return_value = chain
+
+    table_mock = MagicMock()
+    table_mock.select.return_value = chain
+    table_mock.insert.return_value = chain
+    table_mock.update.return_value = chain
+    table_mock.delete.return_value = chain
+    table_mock.upsert.return_value = chain
+
+    mock_sb.table.return_value = table_mock
+    return mock_sb
 
 
 @pytest.fixture
-def test_db(tmp_path):
-    """Create a temporary test database."""
-    db_path = tmp_path / "test.db"
-
-    # Read and execute schema
-    schema_path = os.path.join(os.path.dirname(__file__), "..", "database", "schema.sql")
-    with open(schema_path) as f:
-        schema_sql = f.read()
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.executescript(schema_sql)
-    conn.commit()
-    conn.close()
-
-    def get_test_connection():
-        c = sqlite3.connect(str(db_path))
-        c.row_factory = sqlite3.Row
-        return c
-
-    with patch("database.models.get_db_connection", side_effect=get_test_connection):
-        yield get_test_connection
+def test_db():
+    """Patch the Supabase client at the point where models import it."""
+    mock_sb = _make_supabase_mock()
+    # Patch at the source module so all importers see the mock
+    with patch("database.supabase_client.get_sb", return_value=mock_sb), \
+         patch("database.supabase_client._client", mock_sb):
+        yield mock_sb

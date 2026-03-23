@@ -98,6 +98,7 @@ if DEVELOPMENT_MODE:
 from database import models
 from services.llm import parse_intent
 from services import phone_verification
+from services.telegram import send_telegram_message
 from agents.dispatcher import dispatch_task as agent_dispatch_task
 from agents.dispatcher import set_terminal_access, get_terminal_access
 
@@ -874,6 +875,135 @@ async def transcribe_text(
         import traceback
         logger.error("transcribe-text pipeline error=%r trace=%s", e, traceback.format_exc())
         return {"status": "error", "message": "Internal server error"}
+
+# --- 5c. TELEGRAM WEBHOOK ---
+
+class TelegramWebhookRequest(BaseModel):
+    update_id: int
+    message: dict | None = None
+    edited_message: dict | None = None
+    
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    """Receives updates from Telegram bot."""
+    # Security: check secret token if configured
+    expected_token = os.environ.get("TELEGRAM_SECRET_TOKEN")
+    if expected_token:
+        provided_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if provided_token != expected_token:
+            logger.warning("telegram_webhook: unauthorized access attempt (invalid secret token)")
+            return {"status": "unauthorized"}
+
+    try:
+        data = await request.json()
+        logger.info("telegram_webhook received payload")
+        
+        # Extract message
+        message = data.get("message") or data.get("edited_message")
+        if not message:
+            return {"status": "ignored", "reason": "No message object"}
+            
+        chat = message.get("chat", {})
+        chat_id = chat.get("id")
+        text = message.get("text", "").strip()
+        
+        if not chat_id or not text:
+            return {"status": "ignored", "reason": "Empty chat_id or text"}
+            
+        # 1. Authenticate user by chat_id
+        user_id = models.get_user_id_by_telegram_chat_id(chat_id)
+        if not user_id:
+            # For this MVP/course project, if we don't recognize the chat_id, we create a new user 
+            # or ask them to link. Here we auto-provision a pseudo-user for demonstration.
+            pseudo_user_id = f"tg_{chat_id}"
+            pseudo_email = f"tg_{chat_id}@telegram.local"
+            models.upsert_user(
+                user_id=pseudo_user_id, 
+                email=pseudo_email, 
+                telegram_chat_id=str(chat_id)
+            )
+            user_id = pseudo_user_id
+            await send_telegram_message(
+                chat_id, 
+                "Welcome to Dispatch! I've created a new account for you. Processing your command now..."
+            )
+            # return {"status": "success", "action": "user_created"}
+            
+        # 2. Re-use the existing transcribe_text logic for intent parsing
+        user_projects = models.get_user_projects(user_id)
+        intent_data = await parse_intent(text, user_projects) or {"intent": "unknown"}
+        intent_type = intent_data.get("intent") or "unknown"
+        project_name = intent_data.get("project_name")
+        task_description = intent_data.get("task_description")
+
+        action_result = None
+        created = {"project_id": None, "task_id": None}
+
+        if intent_type == "create_project":
+            if project_name:
+                created["project_id"] = models.create_project(user_id, project_name)
+                action_result = f"Successfully created project '{project_name}'."
+            else:
+                action_result = "I couldn't determine a project name."
+                
+        elif intent_type == "create_task":
+            if project_name and task_description:
+                project = models.get_project_by_name(user_id, project_name)
+                if project:
+                    models.touch_project(project["id"])
+                    created["task_id"] = models.create_task(
+                        project_id=project["id"], user_id=user_id,
+                        description=task_description, voice_command=text,
+                        raw_transcript=text, intent_type=intent_type,
+                    )
+                    action_result = f"Created task '{task_description}' in project '{project_name}'."
+                else:
+                    action_result = f"Could not find a project named '{project_name}'."
+            else:
+                action_result = "I couldn't determine the project or task from your command."
+                
+        elif intent_type == "status_check":
+            projects_with_counts = models.get_user_projects_with_task_counts(user_id)
+            if not projects_with_counts:
+                action_result = "You don't have any projects yet."
+            else:
+                lines = [f"You have {len(projects_with_counts)} project(s):"]
+                for p in projects_with_counts:
+                    lines.append(f"  '{p['name']}' — {p['total_tasks'] or 0} task(s)")
+                action_result = "\n".join(lines)
+        else:
+            action_result = "I wasn't able to map that command to an action."
+
+        # Audit/History
+        logged_task_id = None
+        if intent_type != "create_project":
+            fresh_projects = models.get_user_projects(user_id)
+            logged_task_id = models.log_agent_event_task(
+                user_id=user_id, project_name=project_name, projects=fresh_projects,
+                description=task_description or f"[{intent_type}] {text}",
+                raw_transcript=text, intent_type=intent_type,
+                intent_confidence=None, output_summary=action_result, voice_command=text,
+            )
+
+        # Dispatch Task
+        dispatch_task_id = created.get("task_id") or logged_task_id
+        terminal_granted = models.get_terminal_access_for_user(user_id)
+        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
+            background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+            
+        # Send response back to user
+        if action_result:
+            await send_telegram_message(chat_id, action_result)
+
+        return {"status": "success", "processed": True}
+        
+    except Exception as e:
+        import traceback
+        logger.error("telegram_webhook error=%r trace=%s", e, traceback.format_exc())
+        return {"status": "error"}
 
 # --- 6. CRUD ENDPOINTS (For Dashboard) ---
 

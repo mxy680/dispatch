@@ -21,7 +21,7 @@ def _now_iso() -> str:
 
 # ==================== USERS ====================
 
-def upsert_user(user_id: str, email: str, phone_number: str | None = None):
+def upsert_user(user_id: str, email: str, phone_number: str | None = None, telegram_chat_id: str | None = None):
     sb = get_sb()
     # Check if user already exists — if so, just update.
     existing = sb.table("users").select("id").eq("id", user_id).maybe_single().execute()
@@ -29,13 +29,24 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None):
         update = {"email": email}
         if phone_number:
             update["phone_number"] = phone_number
+        if telegram_chat_id:
+            update["telegram_chat_id"] = str(telegram_chat_id)
         sb.table("users").update(update).eq("id", user_id).execute()
     else:
         data = {"id": user_id, "email": email}
         if phone_number:
             data["phone_number"] = phone_number
+        if telegram_chat_id:
+            data["telegram_chat_id"] = str(telegram_chat_id)
         sb.table("users").insert(data).execute()
-    logger.debug("upsert_user user_id=%s email=%r phone=%r", user_id, email, phone_number)
+    logger.debug("upsert_user user_id=%s email=%r phone=%r telegram=%r", user_id, email, phone_number, telegram_chat_id)
+
+def get_user_id_by_telegram_chat_id(chat_id: str | int) -> str | None:
+    """Look up a user by their telegram chat_id."""
+    sb = get_sb()
+    res = sb.table("users").select("id").eq("telegram_chat_id", str(chat_id)).maybe_single().execute()
+    data = res.data if res else None
+    return data["id"] if data else None
 
 
 def update_user_phone_number(user_id: str, phone_number: str) -> None:
