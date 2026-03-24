@@ -742,7 +742,7 @@ async def transcribe_audio(
         dispatch_task_id = created.get("task_id") or logged_task_id
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
-        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
+        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
@@ -855,7 +855,7 @@ async def transcribe_text(
         dispatch_task_id = created.get("task_id") or logged_task_id
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
-        if intent_type in ("create_task", "fix_bug") and dispatch_task_id:
+        if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
             if background_tasks:
                 background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
                 agent_status = "dispatching"
@@ -1043,12 +1043,22 @@ async def get_project_tasks(project_id: str, user: dict = Depends(get_current_us
     return {"success": True, "tasks": models.get_project_tasks(project_id)}
 
 @app.post("/api/tasks")
-async def create_task(request: CreateTaskRequest, user: dict = Depends(get_current_user)):
+async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     if not request.user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
     _require_user_match(request.user_id, user.id)
     _require_project_owner(user.id, request.project_id)
     tid = models.create_task(request.project_id, request.user_id, request.description)
+
+    # Auto-dispatch if terminal access is granted
+    terminal_granted = get_terminal_access(request.user_id)
+    if terminal_granted:
+        intent_data = {
+            "intent": "create_task",
+            "task_description": request.description,
+        }
+        background_tasks.add_task(agent_dispatch_task, tid, intent_data, terminal_granted)
+
     return {"success": True, "task_id": tid}
 
 @app.patch("/api/tasks/{task_id}")
@@ -1572,7 +1582,7 @@ async def twilio_recording(request: Request, background_tasks: BackgroundTasks):
             )
 
         # Dispatch to agent pipeline if actionable
-        if intent_type in ("create_task", "fix_bug") and logged_task_id:
+        if intent_type in ("create_task", "create_project", "fix_bug") and logged_task_id:
             terminal_granted = get_terminal_access(user_id)
             background_tasks.add_task(agent_dispatch_task, logged_task_id, intent_data, terminal_granted)
             logger.info(
