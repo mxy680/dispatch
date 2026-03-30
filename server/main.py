@@ -306,6 +306,20 @@ class UnifiedCommandRequest(BaseModel):
     device_id: str | None = None
 
 
+class ApprovalActionRequest(BaseModel):
+    action: Literal["approve", "reject"]
+
+
+class EditCommandRequest(BaseModel):
+    prompt: str
+
+
+class ContextualReplyRequest(BaseModel):
+    project_id: str
+    reply: str
+    command_id: str | None = None
+
+
 class DevicePairStartRequest(BaseModel):
     name: str | None = None
     platform: str | None = None
@@ -398,6 +412,38 @@ def _require_device_owner(user_id: str, device_id: str) -> dict:
     return dev
 
 
+def _load_state_context(raw: dict | None) -> dict:
+    if not raw:
+        return {}
+    ctx = raw.get("context_json")
+    if not ctx:
+        return {}
+    if isinstance(ctx, dict):
+        return ctx
+    if isinstance(ctx, str):
+        try:
+            parsed = json.loads(ctx)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _classify_reply(text: str) -> str:
+    t = (text or "").strip().lower()
+    if not t:
+        return "empty"
+    if t.endswith("?") or t.startswith("what ") or t.startswith("why ") or t.startswith("how "):
+        return "question"
+    if t in {"yes", "y", "approve", "run it", "do it", "go ahead"}:
+        return "approve"
+    if t in {"no", "n", "reject", "cancel", "don't run", "do not run"}:
+        return "reject"
+    if t.startswith("edit ") or t.startswith("change ") or t.startswith("instead "):
+        return "edit"
+    return "unknown"
+
+
 @app.post("/api/settings/agent-tokens")
 async def create_agent_token(request: CreateAgentTokenRequest, user: dict = Depends(get_current_user)):
     models.upsert_user(user_id=user.id, email=getattr(user, "email", None) or f"{user.id}@local", phone_number=getattr(user, "phone", None))
@@ -425,6 +471,12 @@ async def delete_history(user: dict = Depends(get_current_user)):
 
 @app.get("/api/settings/provider")
 async def get_provider_preference(user: dict = Depends(get_current_user)):
+    # Ensure a users row exists so user_preferences FK constraints are satisfied.
+    models.upsert_user(
+        user_id=user.id,
+        email=getattr(user, "email", None) or f"{user.id}@local",
+        phone_number=getattr(user, "phone", None),
+    )
     provider = models.get_default_provider_for_user(user.id)
     return {"success": True, "provider": provider}
 
@@ -434,6 +486,11 @@ async def set_provider_preference(
     request: UpdateProviderPreferenceRequest,
     user: dict = Depends(get_current_user),
 ):
+    models.upsert_user(
+        user_id=user.id,
+        email=getattr(user, "email", None) or f"{user.id}@local",
+        phone_number=getattr(user, "phone", None),
+    )
     models.set_default_provider_for_user(user.id, request.provider)
     return {"success": True, "provider": request.provider}
 
@@ -779,6 +836,7 @@ async def transcribe_audio(
 
 class TextCommandRequest(BaseModel):
     text: str
+    project_id: str | None = None
 
 @app.post("/transcribe-text")
 async def transcribe_text(
@@ -791,6 +849,19 @@ async def transcribe_text(
         transcript_text = request.text.strip()
         if not transcript_text:
             return {"status": "error", "message": "Empty text"}
+
+        if request.project_id:
+            state = models.get_conversation_state(user_id=user.id, project_id=request.project_id)
+            if state and state.get("state") == "awaiting_approval" and state.get("active_command_id"):
+                fake = ContextualReplyRequest(project_id=request.project_id, reply=transcript_text)
+                resolved = await resolve_contextual_reply(fake, user)
+                return {
+                    "status": "success",
+                    "transcript": transcript_text,
+                    "intent": {"intent": "contextual_reply"},
+                    "action_result": "Resolved pending approval reply.",
+                    "resolution": resolved,
+                }
 
         models.upsert_user(
             user_id=user.id,
@@ -1271,9 +1342,26 @@ async def create_unified_command(
         provider=provider,
         user_prompt=prompt,
         normalized_command=command,
+        status="pending_approval",
+    )
+    models.add_conversation_turn(
+        user_id=user.id,
+        project_id=request.project_id,
+        session_id=session["id"],
+        command_id=command_id,
+        role="assistant",
+        turn_type="approval_request",
+        content=f"Proposed command ({provider}): {command}",
+    )
+    models.upsert_conversation_state(
+        user_id=user.id,
+        project_id=request.project_id,
+        state="awaiting_approval",
+        active_command_id=command_id,
+        context_json={"provider": provider, "session_id": session["id"]},
     )
     logger.info(
-        "unified command queued user_id=%s project_id=%s session_id=%s provider=%s source=%s command_id=%s",
+        "unified command pending approval user_id=%s project_id=%s session_id=%s provider=%s source=%s command_id=%s",
         user.id,
         request.project_id,
         session["id"],
@@ -1287,6 +1375,7 @@ async def create_unified_command(
         "command_id": command_id,
         "provider": provider,
         "normalized_command": command,
+        "status": "pending_approval",
     }
 
 
@@ -1301,6 +1390,203 @@ async def get_unified_timeline(
     if project_id:
         rows = [r for r in rows if r.get("project_id") == project_id]
     return {"success": True, "commands": rows}
+
+
+@app.get("/api/unified/conversation")
+async def get_unified_conversation(
+    project_id: str | None = None,
+    limit: int = 100,
+    user: dict = Depends(get_current_user),
+):
+    safe_limit = max(1, min(limit, 300))
+    rows = models.list_conversation_turns_for_user(user_id=user.id, project_id=project_id, limit=safe_limit)
+    return {"success": True, "turns": rows}
+
+
+@app.post("/api/unified/commands/{command_id}/approval")
+async def approval_action(
+    command_id: str,
+    request: ApprovalActionRequest,
+    user: dict = Depends(get_current_user),
+):
+    cmd = _require_terminal_command_owner(user.id, command_id)
+    if cmd.get("status") not in ("pending_approval", "queued"):
+        raise HTTPException(status_code=400, detail="Command is not awaiting approval")
+    next_status = "queued" if request.action == "approve" else "cancelled"
+    updated = models.update_terminal_command_for_approval(command_id=command_id, status=next_status)
+    session = models.get_terminal_session(cmd["session_id"])
+    project_id = session.get("project_id") if session else None
+    models.add_conversation_turn(
+        user_id=user.id,
+        project_id=project_id,
+        session_id=cmd.get("session_id"),
+        command_id=command_id,
+        role="assistant",
+        turn_type="approval_result",
+        content=f"Command {request.action}d.",
+    )
+    models.upsert_conversation_state(
+        user_id=user.id,
+        project_id=project_id,
+        state="idle" if next_status != "pending_approval" else "awaiting_approval",
+        active_command_id=command_id if next_status == "pending_approval" else None,
+        context_json={},
+    )
+    return {"success": True, "command": updated}
+
+
+@app.put("/api/unified/commands/{command_id}/edit")
+async def edit_pending_command(
+    command_id: str,
+    request: EditCommandRequest,
+    user: dict = Depends(get_current_user),
+):
+    cmd = _require_terminal_command_owner(user.id, command_id)
+    if cmd.get("status") not in ("pending_approval", "queued"):
+        raise HTTPException(status_code=400, detail="Command cannot be edited in current state")
+    from agents.command_builder import build_provider_command
+
+    provider = cmd.get("provider") or "shell"
+    new_prompt = (request.prompt or "").strip()
+    if not new_prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+    new_command = build_provider_command(provider=provider, prompt=new_prompt)
+    updated = models.update_terminal_command_for_approval(
+        command_id=command_id,
+        status="pending_approval",
+        command=new_command,
+        normalized_command=new_command,
+    )
+    session = models.get_terminal_session(cmd["session_id"])
+    project_id = session.get("project_id") if session else None
+    models.add_conversation_turn(
+        user_id=user.id,
+        project_id=project_id,
+        session_id=cmd.get("session_id"),
+        command_id=command_id,
+        role="assistant",
+        turn_type="approval_request",
+        content=f"Edited command ready for approval: {new_command}",
+    )
+    models.upsert_conversation_state(
+        user_id=user.id,
+        project_id=project_id,
+        state="awaiting_approval",
+        active_command_id=command_id,
+        context_json={"provider": provider, "session_id": cmd.get("session_id")},
+    )
+    return {"success": True, "command": updated}
+
+
+@app.post("/api/unified/reply")
+async def resolve_contextual_reply(
+    request: ContextualReplyRequest,
+    user: dict = Depends(get_current_user),
+):
+    _require_project_owner(user.id, request.project_id)
+    reply = (request.reply or "").strip()
+    if not reply:
+        raise HTTPException(status_code=400, detail="Reply cannot be empty")
+
+    state = models.get_conversation_state(user_id=user.id, project_id=request.project_id)
+    ctx = _load_state_context(state)
+    active_command_id = request.command_id or (state.get("active_command_id") if state else None)
+    if not active_command_id:
+        models.add_conversation_turn(
+            user_id=user.id,
+            project_id=request.project_id,
+            session_id=None,
+            command_id=None,
+            role="assistant",
+            turn_type="info",
+            content="No pending command to resolve. Submit a command first.",
+        )
+        return {"success": True, "intent": "unknown", "message": "No pending command"}
+
+    cmd = _require_terminal_command_owner(user.id, active_command_id)
+    intent = _classify_reply(reply)
+    models.add_conversation_turn(
+        user_id=user.id,
+        project_id=request.project_id,
+        session_id=cmd.get("session_id"),
+        command_id=active_command_id,
+        role="user",
+        turn_type="reply",
+        content=reply,
+    )
+
+    if intent == "approve":
+        updated = models.update_terminal_command_for_approval(command_id=active_command_id, status="queued")
+        models.upsert_conversation_state(
+            user_id=user.id,
+            project_id=request.project_id,
+            state="idle",
+            active_command_id=None,
+            context_json={},
+        )
+        models.add_conversation_turn(
+            user_id=user.id,
+            project_id=request.project_id,
+            session_id=cmd.get("session_id"),
+            command_id=active_command_id,
+            role="assistant",
+            turn_type="approval_result",
+            content="Approved. Running now.",
+        )
+        return {"success": True, "intent": intent, "command": updated}
+
+    if intent == "reject":
+        updated = models.update_terminal_command_for_approval(command_id=active_command_id, status="cancelled")
+        models.upsert_conversation_state(
+            user_id=user.id,
+            project_id=request.project_id,
+            state="idle",
+            active_command_id=None,
+            context_json={},
+        )
+        models.add_conversation_turn(
+            user_id=user.id,
+            project_id=request.project_id,
+            session_id=cmd.get("session_id"),
+            command_id=active_command_id,
+            role="assistant",
+            turn_type="approval_result",
+            content="Rejected. Command will not run.",
+        )
+        return {"success": True, "intent": intent, "command": updated}
+
+    if intent in ("edit", "unknown"):
+        from agents.command_builder import build_provider_command
+
+        provider = (ctx.get("provider") if isinstance(ctx, dict) else None) or cmd.get("provider") or "shell"
+        edited_command = build_provider_command(provider=provider, prompt=reply)
+        updated = models.update_terminal_command_for_approval(
+            command_id=active_command_id,
+            status="pending_approval",
+            command=edited_command,
+            normalized_command=edited_command,
+        )
+        models.add_conversation_turn(
+            user_id=user.id,
+            project_id=request.project_id,
+            session_id=cmd.get("session_id"),
+            command_id=active_command_id,
+            role="assistant",
+            turn_type="approval_request",
+            content=f"Updated proposal: {edited_command}",
+        )
+        return {"success": True, "intent": "contextual_reply", "command": updated}
+
+    models.add_conversation_turn(
+        user_id=user.id,
+        project_id=request.project_id,
+        session_id=cmd.get("session_id"),
+        command_id=active_command_id,
+        role="assistant",
+        turn_type="question",
+        content="I can approve, reject, or edit the pending command. Reply with yes/no or an updated command.",
+    )
+    return {"success": True, "intent": intent}
 
 
 # --- 9. LOCAL AGENT (USER MACHINE) ENDPOINTS ---

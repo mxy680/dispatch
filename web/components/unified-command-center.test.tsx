@@ -1,24 +1,27 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { UnifiedCommandCenter } from "./unified-command-center";
+import { authFetch } from "@/lib/supabase/access-token";
 
 vi.mock("@/lib/supabase/access-token", () => ({
-  getAuthHeader: vi.fn().mockResolvedValue(null),
-  authFetch: vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }),
+  authFetch: vi.fn(),
 }));
 
 describe("UnifiedCommandCenter", () => {
-  it("renders unified command center shell", () => {
+  it("renders command controls and conversation section", () => {
+    vi.mocked(authFetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ commands: [], turns: [] }),
+    } as Response);
     render(
       <UnifiedCommandCenter
         projects={[
           { id: "p1", name: "Project One" },
-          { id: "p2", name: "Project Two" },
         ]}
       />
     );
-    expect(screen.getByText("UNIFIED COMMAND CENTER")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Type what you want the coding agent to do")).toBeInTheDocument();
+    expect(screen.getByText("Voice: Off")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Describe what you want the agent to do...")).toBeInTheDocument();
   });
 });
 

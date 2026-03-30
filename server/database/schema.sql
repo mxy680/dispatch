@@ -96,13 +96,45 @@ CREATE TABLE IF NOT EXISTS terminal_commands (
     provider TEXT DEFAULT 'shell', -- 'cursor' | 'claude' | 'shell'
     user_prompt TEXT,
     normalized_command TEXT,
-    status TEXT DEFAULT 'queued',  -- 'queued', 'running', 'completed', 'failed', 'cancelled'
+    status TEXT DEFAULT 'queued',  -- 'pending_approval', 'queued', 'running', 'completed', 'failed', 'cancelled'
     exit_code INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES terminal_sessions(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 4e. CONVERSATION TURNS (assistant/user thread shown in command center)
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT,
+    session_id TEXT,
+    command_id TEXT,
+    role TEXT NOT NULL, -- 'assistant' | 'user' | 'system'
+    turn_type TEXT NOT NULL, -- 'question' | 'reply' | 'approval_request' | 'approval_result' | 'info'
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (session_id) REFERENCES terminal_sessions(id),
+    FOREIGN KEY (command_id) REFERENCES terminal_commands(id)
+);
+
+-- 4f. CONVERSATION STATE (lightweight pending context per user+project)
+CREATE TABLE IF NOT EXISTS conversation_state (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT,
+    active_command_id TEXT,
+    state TEXT NOT NULL DEFAULT 'idle', -- 'idle' | 'awaiting_approval'
+    context_json TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (active_command_id) REFERENCES terminal_commands(id)
 );
 
 -- 4d. TERMINAL LOGS (chunked stdout/stderr streaming, optional but useful for UI)
@@ -231,6 +263,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_created ON agent_tokens(user_id
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_user_project ON terminal_sessions(user_id, project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_commands_session_created ON terminal_commands(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_terminal_logs_command_sequence ON terminal_logs(command_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_conversation_turns_user_project_created ON conversation_turns(user_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_conversation_state_user_project ON conversation_state(user_id, project_id);
 CREATE INDEX IF NOT EXISTS idx_companion_devices_user_created ON companion_devices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_device_project_links_device_project ON device_project_links(device_id, project_id);
 CREATE INDEX IF NOT EXISTS idx_cursor_context_device_project_created ON cursor_context_snapshots(device_id, project_id, created_at);

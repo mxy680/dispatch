@@ -153,7 +153,9 @@ class TestUnifiedCommandsEndpoints:
         with patch("database.models.get_project_by_id", return_value=project), \
              patch("database.models.get_default_provider_for_user", return_value="claude"), \
              patch("database.models.get_or_create_terminal_session_for_project", return_value=session), \
-             patch("database.models.create_terminal_command", return_value=cmd_id):
+             patch("database.models.create_terminal_command", return_value=cmd_id), \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
             response = client.post(
                 "/api/unified/commands",
                 json={"project_id": "proj-1", "prompt": "fix the login bug", "provider": "claude"},
@@ -169,7 +171,9 @@ class TestUnifiedCommandsEndpoints:
         project = _make_project()
 
         with patch("database.models.get_project_by_id", return_value=project), \
-             patch("database.models.get_default_provider_for_user", return_value="claude"):
+             patch("database.models.get_default_provider_for_user", return_value="claude"), \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
             response = client.post(
                 "/api/unified/commands",
                 json={"project_id": "proj-1", "prompt": "   "},
@@ -178,7 +182,9 @@ class TestUnifiedCommandsEndpoints:
         assert response.status_code == 400
 
     def test_queue_command_unknown_project_returns_404(self):
-        with patch("database.models.get_project_by_id", return_value=None):
+        with patch("database.models.get_project_by_id", return_value=None), \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
             response = client.post(
                 "/api/unified/commands",
                 json={"project_id": "does-not-exist", "prompt": "do something"},
@@ -197,6 +203,38 @@ class TestUnifiedCommandsEndpoints:
         assert body["success"] is True
         assert isinstance(body["commands"], list)
         assert len(body["commands"]) == 2
+
+    def test_queue_command_starts_pending_approval(self):
+        project = _make_project()
+        session = _make_session()
+        cmd_id = "cmd-pa"
+        with patch("database.models.get_project_by_id", return_value=project), \
+             patch("database.models.get_default_provider_for_user", return_value="claude"), \
+             patch("database.models.get_or_create_terminal_session_for_project", return_value=session), \
+             patch("database.models.create_terminal_command", return_value=cmd_id) as create_cmd, \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
+            response = client.post(
+                "/api/unified/commands",
+                json={"project_id": "proj-1", "prompt": "list files", "provider": "claude"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "pending_approval"
+        assert create_cmd.call_args.kwargs["status"] == "pending_approval"
+
+    def test_approve_pending_command(self):
+        cmd = {"id": "cmd-1", "user_id": USER_ID, "session_id": "sess-1", "status": "pending_approval"}
+        session = {"id": "sess-1", "project_id": "proj-1"}
+        with patch("database.models.get_terminal_command", return_value=cmd), \
+             patch("database.models.get_terminal_session", return_value=session), \
+             patch("database.models.update_terminal_command_for_approval", return_value={**cmd, "status": "queued"}), \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
+            response = client.post("/api/unified/commands/cmd-1/approval", json={"action": "approve"})
+
+        assert response.status_code == 200
+        assert response.json()["command"]["status"] == "queued"
 
 
 # ---------------------------------------------------------------------------

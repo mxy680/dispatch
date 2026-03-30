@@ -706,6 +706,7 @@ def create_terminal_command(
     provider: str = "shell",
     user_prompt: str | None = None,
     normalized_command: str | None = None,
+    status: str = "queued",
 ) -> str:
     sb = get_sb()
     command_id = str(uuid.uuid4())
@@ -719,7 +720,7 @@ def create_terminal_command(
         "provider": provider,
         "user_prompt": user_prompt,
         "normalized_command": normalized,
-        "status": "queued",
+        "status": status,
     }).execute()
     # Update session timestamp (non-transactional, cosmetic)
     sb.table("terminal_sessions").update({"updated_at": _now_iso()}).eq("id", session_id).execute()
@@ -902,6 +903,24 @@ def complete_terminal_command(
     }).eq("id", command_id).execute()
 
 
+def update_terminal_command_for_approval(
+    *,
+    command_id: str,
+    status: str,
+    command: str | None = None,
+    normalized_command: str | None = None,
+) -> dict | None:
+    sb = get_sb()
+    payload = {"status": status}
+    if command is not None:
+        payload["command"] = command
+    if normalized_command is not None:
+        payload["normalized_command"] = normalized_command
+    sb.table("terminal_commands").update(payload).eq("id", command_id).execute()
+    res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
+    return res.data if res else None
+
+
 def append_terminal_log_chunk(
     *,
     command_id: str,
@@ -932,6 +951,90 @@ def get_terminal_logs_for_command(
         query = query.gt("sequence", after_sequence)
     res = query.order("sequence").limit(limit).execute()
     return res.data or []
+
+
+def add_conversation_turn(
+    *,
+    user_id: str,
+    project_id: str | None,
+    session_id: str | None,
+    command_id: str | None,
+    role: str,
+    turn_type: str,
+    content: str,
+) -> dict:
+    sb = get_sb()
+    turn_id = str(uuid.uuid4())
+    row = {
+        "id": turn_id,
+        "user_id": user_id,
+        "project_id": project_id,
+        "session_id": session_id,
+        "command_id": command_id,
+        "role": role,
+        "turn_type": turn_type,
+        "content": content,
+    }
+    sb.table("conversation_turns").insert(row).execute()
+    return row
+
+
+def list_conversation_turns_for_user(*, user_id: str, project_id: str | None = None, limit: int = 100) -> list[dict]:
+    sb = get_sb()
+    try:
+        q = sb.table("conversation_turns").select("*").eq("user_id", user_id)
+        if project_id:
+            q = q.eq("project_id", project_id)
+        res = q.order("created_at", desc=True).limit(limit).execute()
+        rows = res.data or []
+        return list(reversed(rows))
+    except Exception as e:
+        # In hosted Supabase, the table might not exist yet; fail soft with empty thread.
+        err = str(e).lower()
+        if "conversation_turns" in err and ("pgrst205" in err or "not find the table" in err):
+            logger.warning("conversation_turns table missing; returning empty thread for user_id=%s", user_id)
+            return []
+        raise
+
+
+def get_conversation_state(*, user_id: str, project_id: str | None) -> dict | None:
+    sb = get_sb()
+    q = sb.table("conversation_state").select("*").eq("user_id", user_id)
+    if project_id:
+        q = q.eq("project_id", project_id)
+    else:
+        q = q.is_("project_id", "null")
+    res = q.limit(1).maybe_single().execute()
+    return res.data if res else None
+
+
+def upsert_conversation_state(
+    *,
+    user_id: str,
+    project_id: str | None,
+    state: str,
+    active_command_id: str | None,
+    context_json: dict | None = None,
+) -> dict:
+    sb = get_sb()
+    existing = get_conversation_state(user_id=user_id, project_id=project_id)
+    payload = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "state": state,
+        "active_command_id": active_command_id,
+        "context_json": json.dumps(context_json or {}),
+        "updated_at": _now_iso(),
+    }
+    if existing:
+        sb.table("conversation_state").update(payload).eq("id", existing["id"]).execute()
+        res = sb.table("conversation_state").select("*").eq("id", existing["id"]).maybe_single().execute()
+        return (res.data if res else None) or {**payload, "id": existing["id"]}
+
+    state_id = str(uuid.uuid4())
+    payload["id"] = state_id
+    sb.table("conversation_state").insert(payload).execute()
+    return payload
 
 
 def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:

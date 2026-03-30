@@ -15,6 +15,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CommandLogViewer } from "@/components/command-log-viewer";
+import { playEarcon } from "@/lib/voice/earcons";
+import { speak } from "@/lib/voice/tts";
+import { createVadLoop, type VadLoop } from "@/lib/voice/vad-loop";
 
 type ProjectOption = { id: string; name: string };
 
@@ -33,6 +36,14 @@ type TimelineCommand = {
 };
 
 type CommandMode = "shell" | "agent";
+type ConversationTurn = {
+  id: string;
+  role: "assistant" | "user" | "system";
+  turn_type: string;
+  content: string;
+  command_id?: string | null;
+  created_at?: string;
+};
 
 function statusDot(status: string) {
   if (status === "completed") return "bg-emerald-400";
@@ -66,7 +77,12 @@ export function UnifiedCommandCenter({
   const [error, setError] = useState<string | null>(null);
 
   const [commands, setCommands] = useState<TimelineCommand[]>([]);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [activeCommandId, setActiveCommandId] = useState<string>("");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [listening, setListening] = useState(false);
+  const vadRef = useRef<VadLoop | null>(null);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
@@ -76,6 +92,10 @@ export function UnifiedCommandCenter({
   const activeCommand = useMemo(
     () => commands.find((c) => c.id === activeCommandId) ?? null,
     [commands, activeCommandId]
+  );
+  const activePendingApproval = useMemo(
+    () => commands.find((c) => c.status === "pending_approval") ?? null,
+    [commands]
   );
 
   // Load saved provider preference
@@ -103,15 +123,31 @@ export function UnifiedCommandCenter({
     } catch { /* silent */ }
   }, [activeCommandId, backendUrl, selectedProjectId]);
 
+  const refreshConversation = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ limit: "80" });
+      if (selectedProjectId) params.set("project_id", selectedProjectId);
+      const res = await authFetch(`${backendUrl}/api/unified/conversation?${params}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const next = (data.turns ?? []) as ConversationTurn[];
+      setTurns(next);
+    } catch {
+      // noop
+    }
+  }, [backendUrl, selectedProjectId]);
+
   // Poll timeline
   useEffect(() => {
     refreshTimeline();
+    refreshConversation();
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       refreshTimeline();
+      refreshConversation();
     }, 4000);
     return () => clearInterval(interval);
-  }, [refreshTimeline]);
+  }, [refreshTimeline, refreshConversation]);
 
   // Auto-select first command when active is removed
   useEffect(() => {
@@ -139,8 +175,11 @@ export function UnifiedCommandCenter({
       const json = await res.json();
       if (!res.ok) throw new Error(json?.detail ?? "Failed to queue command");
       setInput("");
-      setMessage(mode === "shell" ? "Command sent" : `Sent to ${provider}`);
+      setMessage("Command drafted. Waiting for approval.");
+      playEarcon("approval");
+      speak("I drafted a command. Please approve, reject, or edit.");
       await refreshTimeline();
+      await refreshConversation();
       if (json.command_id) setActiveCommandId(json.command_id);
       setTimeout(() => setMessage(null), 3000);
     } catch (e: unknown) {
@@ -150,6 +189,82 @@ export function UnifiedCommandCenter({
       inputRef.current?.focus();
     }
   };
+
+  const sendContextualReply = useCallback(async (text: string) => {
+    if (!selectedProjectId || !text.trim()) return;
+    playEarcon("thinking");
+    const res = await authFetch(`${backendUrl}/api/unified/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: selectedProjectId,
+        reply: text,
+        command_id: activePendingApproval?.id ?? undefined,
+      }),
+    });
+    if (!res.ok) {
+      playEarcon("error");
+      throw new Error("Failed to send reply");
+    }
+    await refreshTimeline();
+    await refreshConversation();
+    playEarcon("success");
+  }, [activePendingApproval?.id, backendUrl, refreshConversation, refreshTimeline, selectedProjectId]);
+
+  const setApproval = useCallback(async (commandId: string, action: "approve" | "reject") => {
+    const res = await authFetch(`${backendUrl}/api/unified/commands/${commandId}/approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    if (!res.ok) throw new Error("Failed to update approval");
+    await refreshTimeline();
+    await refreshConversation();
+  }, [backendUrl, refreshConversation, refreshTimeline]);
+
+  const submitEdit = useCallback(async (commandId: string) => {
+    const next = editPrompt.trim();
+    if (!next) return;
+    const res = await authFetch(`${backendUrl}/api/unified/commands/${commandId}/edit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: next }),
+    });
+    if (!res.ok) throw new Error("Failed to edit command");
+    setEditPrompt("");
+    await refreshTimeline();
+    await refreshConversation();
+  }, [backendUrl, editPrompt, refreshConversation, refreshTimeline]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    vadRef.current = createVadLoop({
+      onTranscript: async (text) => {
+        try {
+          if (activePendingApproval) {
+            await sendContextualReply(text);
+          } else {
+            setInput(text);
+          }
+        } catch {
+          setError("Voice action failed");
+        }
+      },
+      onListeningChange: (next) => {
+        setListening(next);
+        if (next) playEarcon("listening");
+      },
+      onError: (msg) => setError(msg),
+    });
+    return () => {
+      vadRef.current?.stop();
+    };
+  }, [activePendingApproval, mounted, sendContextualReply]);
+
+  useEffect(() => {
+    if (!activePendingApproval) return;
+    speak("Approval needed for the pending command.");
+  }, [activePendingApproval]);
 
   const noProjects = projects.length === 0;
 
@@ -234,6 +349,19 @@ export function UnifiedCommandCenter({
             )}
 
             <div className="flex-1" />
+            <Button
+              variant={voiceEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs font-mono"
+              onClick={() => {
+                const next = !voiceEnabled;
+                setVoiceEnabled(next);
+                if (next) vadRef.current?.start();
+                else vadRef.current?.stop();
+              }}
+            >
+              {voiceEnabled ? (listening ? "Voice: Listening" : "Voice: On") : "Voice: Off"}
+            </Button>
 
             {message && <span className="text-xs font-mono text-emerald-400">{message}</span>}
             {error && <span className="text-xs font-mono text-red-400">{error}</span>}
@@ -311,11 +439,54 @@ export function UnifiedCommandCenter({
             </div>
           </Card>
 
-          <CommandLogViewer
-            commandId={activeCommandId}
-            commandStatus={activeCommand?.status ?? ""}
-            height="280px"
-          />
+          <div className="space-y-2">
+            <Card className="overflow-hidden">
+              <div className="px-3 py-2 border-b border-border">
+                <span className="text-xs font-medium text-muted-foreground">Conversation</span>
+              </div>
+              <div className="max-h-[180px] overflow-auto p-3 space-y-2">
+                {turns.length === 0 && (
+                  <div className="text-xs text-muted-foreground">No conversation yet.</div>
+                )}
+                {turns.map((t) => (
+                  <div key={t.id} className="text-xs font-mono">
+                    <span className={t.role === "assistant" ? "text-blue-400" : "text-foreground"}>
+                      {t.role}:
+                    </span>{" "}
+                    <span>{t.content}</span>
+                  </div>
+                ))}
+              </div>
+              {activePendingApproval && (
+                <div className="border-t border-border p-3 space-y-2">
+                  <div className="flex gap-2">
+                    <Button size="sm" className="text-xs" onClick={() => setApproval(activePendingApproval.id, "approve")}>
+                      Approve
+                    </Button>
+                    <Button size="sm" variant="destructive" className="text-xs" onClick={() => setApproval(activePendingApproval.id, "reject")}>
+                      Reject
+                    </Button>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      value={editPrompt}
+                      onChange={(e) => setEditPrompt(e.target.value)}
+                      placeholder="Edit command prompt..."
+                      className="text-xs"
+                    />
+                    <Button size="sm" variant="outline" className="text-xs" onClick={() => submitEdit(activePendingApproval.id)}>
+                      Edit Command
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </Card>
+            <CommandLogViewer
+              commandId={activeCommandId}
+              commandStatus={activeCommand?.status ?? ""}
+              height="280px"
+            />
+          </div>
         </div>
       )}
     </div>

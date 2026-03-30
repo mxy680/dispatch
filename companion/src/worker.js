@@ -198,6 +198,14 @@ export function startWorker() {
         continue;
       }
 
+      if (cmd.status && cmd.status !== "queued") {
+        console.warn(
+          `[worker] safety: received non-executable command id=${cmd.id} status=${cmd.status}; skipping`
+        );
+        await sleep(MIN_BACKOFF_MS);
+        continue;
+      }
+
       const commandId = cmd.id;
       const projectId = cmd.project_id;
       const sessionId = cmd.session_id;
