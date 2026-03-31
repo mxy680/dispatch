@@ -22,10 +22,8 @@ try:
     load_dotenv()
 except Exception as e:
     pass
-os.environ['DEVELOPMENT_MODE']='true'
-DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "true").lower() == "true"
+DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "false").lower() == "true"
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-os.environ['AWS_PROFILE'] = "personal"
 
 class AccessLogThrottleFilter(logging.Filter):
     """
