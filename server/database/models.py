@@ -110,10 +110,24 @@ def delete_project(project_id: str):
     # Terminal logs → commands → sessions
     sessions_res = sb.table("terminal_sessions").select("id").eq("project_id", project_id).execute()
     session_ids = [s["id"] for s in (sessions_res.data or [])]
+    # Conversation turns + state (must precede terminal_commands due to FK on command_id)
+    try:
+        sb.table("conversation_turns").delete().eq("project_id", project_id).execute()
+    except Exception:
+        pass
+    try:
+        sb.table("conversation_state").delete().eq("project_id", project_id).execute()
+    except Exception:
+        pass
     if session_ids:
         cmds_res = sb.table("terminal_commands").select("id").in_("session_id", session_ids).execute()
         cmd_ids = [c["id"] for c in (cmds_res.data or [])]
         if cmd_ids:
+            # Also clean up any conversation_turns referencing these commands
+            try:
+                sb.table("conversation_turns").delete().in_("command_id", cmd_ids).execute()
+            except Exception:
+                pass
             sb.table("terminal_logs").delete().in_("command_id", cmd_ids).execute()
             sb.table("terminal_commands").delete().in_("id", cmd_ids).execute()
         sb.table("terminal_sessions").delete().in_("id", session_ids).execute()
@@ -758,12 +772,15 @@ def get_or_create_terminal_session_for_project(
     instance_id = active[0]["id"] if active else None
 
     sb = get_sb()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff_iso = cutoff.isoformat()
     res = (
         sb.table("terminal_sessions")
         .select("*")
         .eq("user_id", user_id)
         .eq("project_id", project_id)
         .eq("name", name)
+        .gte("updated_at", cutoff_iso)
         .order("updated_at", desc=True)
         .limit(1)
         .maybe_single()
@@ -841,6 +858,29 @@ def _expire_stale_running_commands(user_id: str, stale_minutes: int = 5) -> None
             "completed_at": _now_iso(),
         }).eq("id", cmd["id"]).execute()
         logger.warning("expired stale running command id=%s user=%s", cmd["id"], user_id)
+
+
+def _expire_stale_running_commands_for_sessions(session_ids: list[str], stale_minutes: int = 5) -> None:
+    """Mark commands stuck in 'running' for too long as failed, filtered by session IDs."""
+    if not session_ids:
+        return
+    sb = get_sb()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat()
+    stale_res = (
+        sb.table("terminal_commands")
+        .select("id")
+        .in_("session_id", session_ids)
+        .eq("status", "running")
+        .lt("started_at", cutoff)
+        .execute()
+    )
+    for cmd in (stale_res.data or []):
+        sb.table("terminal_commands").update({
+            "status": "failed",
+            "exit_code": -1,
+            "completed_at": _now_iso(),
+        }).eq("id", cmd["id"]).execute()
+        logger.warning("expired stale running command id=%s (device path)", cmd["id"])
 
 
 def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
@@ -1111,6 +1151,9 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
 
     session_ids = [s["id"] for s in sessions]
     session_project_map = {s["id"]: s["project_id"] for s in sessions}
+
+    # Expire any commands stuck as "running" for too long in these sessions.
+    _expire_stale_running_commands_for_sessions(session_ids)
 
     # Find oldest queued command in those sessions.
     cmd_res = (
