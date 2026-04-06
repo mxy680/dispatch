@@ -4,6 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CommandLogViewer } from "@/components/command-log-viewer";
 
 type ProjectOption = { id: string; name: string };
@@ -57,6 +67,9 @@ export function UnifiedCommandCenter({
 
   const [commands, setCommands] = useState<TimelineCommand[]>([]);
   const [activeCommandId, setActiveCommandId] = useState<string>("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -140,6 +153,16 @@ export function UnifiedCommandCenter({
 
   const noProjects = projects.length === 0;
 
+  if (!mounted) {
+    return (
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          <div className="h-[52px]" />
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (noProjects) {
     return (
       <Card className="overflow-hidden">
@@ -153,50 +176,45 @@ export function UnifiedCommandCenter({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {/* Command Input */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
           {/* Mode + Project selector bar */}
-          <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/30">
-            <div className="flex rounded-md border border-border overflow-hidden mr-2">
-              <button
-                onClick={() => setMode("agent")}
-                className={`px-3 py-1 text-xs font-mono transition-colors ${
-                  mode === "agent"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Agent
-              </button>
-              <button
-                onClick={() => setMode("shell")}
-                className={`px-3 py-1 text-xs font-mono transition-colors ${
-                  mode === "shell"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Shell
-              </button>
-            </div>
-
-            <select
-              value={selectedProjectId}
-              onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="text-xs font-mono bg-background border border-border rounded px-2 py-1 text-foreground"
+          <div className="flex items-center gap-1 px-3 py-2 border-b border-border">
+            <ToggleGroup
+              type="single"
+              value={mode}
+              onValueChange={(v) => { if (v) setMode(v as CommandMode); }}
+              variant="outline"
+              size="sm"
+              className="mr-2 font-mono text-xs"
             >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+              <ToggleGroupItem value="agent" className="px-3 py-1 text-xs font-mono">
+                Agent
+              </ToggleGroupItem>
+              <ToggleGroupItem value="shell" className="px-3 py-1 text-xs font-mono">
+                Shell
+              </ToggleGroupItem>
+            </ToggleGroup>
+
+            <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+              <SelectTrigger size="sm" className="text-xs font-mono h-7">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id} className="text-xs font-mono">
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             {mode === "agent" && (
-              <select
+              <Select
                 value={agentProvider}
-                onChange={(e) => {
-                  const next = e.target.value as "cursor" | "claude";
+                onValueChange={(next: "cursor" | "claude") => {
                   setAgentProvider(next);
                   authFetch(`${backendUrl}/api/settings/provider`, {
                     method: "PUT",
@@ -204,11 +222,15 @@ export function UnifiedCommandCenter({
                     body: JSON.stringify({ provider: next }),
                   }).catch(() => {});
                 }}
-                className="text-xs font-mono bg-background border border-border rounded px-2 py-1 text-foreground"
               >
-                <option value="claude">Claude</option>
-                <option value="cursor">Cursor</option>
-              </select>
+                <SelectTrigger size="sm" className="text-xs font-mono h-7">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="claude" className="text-xs font-mono">Claude</SelectItem>
+                  <SelectItem value="cursor" className="text-xs font-mono">Cursor</SelectItem>
+                </SelectContent>
+              </Select>
             )}
 
             <div className="flex-1" />
@@ -222,7 +244,7 @@ export function UnifiedCommandCenter({
             <span className="flex items-center px-3 text-sm font-mono text-muted-foreground select-none">
               {mode === "shell" ? "$" : ">"}
             </span>
-            <input
+            <Input
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -232,56 +254,59 @@ export function UnifiedCommandCenter({
                   ? "ls -la, git status, npm test ..."
                   : "Describe what you want the agent to do..."
               }
-              className="flex-1 text-sm font-mono bg-transparent py-3 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+              className="flex-1 text-sm font-mono bg-transparent border-none shadow-none py-3 text-foreground placeholder:text-muted-foreground/50 focus-visible:ring-0 focus-visible:ring-offset-0"
             />
-            <button
+            <Button
               onClick={submit}
               disabled={submitting || !input.trim() || !selectedProjectId}
-              className="px-4 py-2 text-sm font-mono font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors mr-1"
+              className="text-sm font-mono font-medium mr-1 self-center"
             >
               {submitting ? "..." : "Run"}
-            </button>
+            </Button>
           </div>
         </CardContent>
       </Card>
 
       {/* Timeline + Output */}
       {commands.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-2">
           {/* Timeline */}
           <Card className="overflow-hidden">
             <div className="px-3 py-2 border-b border-border">
               <span className="text-xs font-medium text-muted-foreground">History</span>
             </div>
-            <div className="max-h-[400px] overflow-auto">
+            <div className="max-h-[280px] overflow-auto">
               {commands.map((c) => (
-                <button
+                <Button
                   key={c.id}
+                  variant="ghost"
                   onClick={() => setActiveCommandId(c.id)}
-                  className={`w-full text-left px-3 py-2.5 border-b border-border last:border-0 transition-colors ${
+                  className={`w-full justify-start h-auto px-3 py-2.5 border-b border-border last:border-0 rounded-none transition-colors ${
                     c.id === activeCommandId
                       ? "bg-accent"
                       : "hover:bg-accent/50"
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(c.status)}`} />
-                    <span className="text-xs font-mono truncate text-foreground">
-                      {c.user_prompt || c.command}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 ml-3.5">
-                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-                      {(c.provider || "shell")}
-                    </Badge>
-                    <span className="text-[10px] text-muted-foreground">{timeAgo(c.created_at)}</span>
-                    {c.exit_code !== undefined && c.exit_code !== null && (
-                      <span className={`text-[10px] ${c.exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
-                        exit {c.exit_code}
+                  <div className="flex flex-col items-start w-full">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(c.status)}`} />
+                      <span className="text-xs font-mono truncate text-foreground">
+                        {c.user_prompt || c.command}
                       </span>
-                    )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 ml-3.5">
+                      <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                        {(c.provider || "shell")}
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground">{timeAgo(c.created_at)}</span>
+                      {c.exit_code !== undefined && c.exit_code !== null && (
+                        <span className={`text-[10px] ${c.exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          exit {c.exit_code}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </button>
+                </Button>
               ))}
             </div>
           </Card>
@@ -289,7 +314,7 @@ export function UnifiedCommandCenter({
           <CommandLogViewer
             commandId={activeCommandId}
             commandStatus={activeCommand?.status ?? ""}
-            height="400px"
+            height="280px"
           />
         </div>
       )}

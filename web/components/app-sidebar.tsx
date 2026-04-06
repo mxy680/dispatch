@@ -22,6 +22,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
 import { clearAccessToken } from "@/lib/supabase/access-token";
 
 const navItems = [
@@ -85,13 +86,15 @@ export function AppSidebar({ userDisplay }: AppSidebarProps) {
           method="post"
           onSubmit={() => clearAccessToken()}
         >
-          <button
+          <Button
             type="submit"
-            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-destructive transition-colors"
+            variant="ghost"
+            size="sm"
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-destructive transition-colors px-0"
           >
             <RiLogoutBoxRLine className="h-3.5 w-3.5" />
             Sign Out
-          </button>
+          </Button>
         </form>
       </SidebarFooter>
     </Sidebar>

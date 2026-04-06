@@ -1,5 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 type CallSession = {
   id: string;
@@ -34,50 +44,59 @@ export default async function HistoryPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">Call History</h1>
 
-      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
-        <div className="bg-black/40 px-4 py-2 border-b border-white/5">
-          <span className="text-xs font-mono text-gray-500">SESSIONS</span>
-        </div>
-        <div className="p-4 overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="text-gray-400">
-              <tr>
-                <th className="text-left py-2">Started</th>
-                <th className="text-left py-2">Duration</th>
-                <th className="text-left py-2">Phone</th>
-                <th className="text-left py-2">Transcript</th>
-                <th className="text-left py-2">Commands</th>
-              </tr>
-            </thead>
-            <tbody className="text-gray-200">
+      <Card className="bg-dark-card border-dark-border overflow-hidden">
+        <CardHeader className="bg-black/40 px-4 py-2 border-b border-white/5 space-y-0 pb-2">
+          <CardTitle className="text-xs font-mono text-gray-500 font-normal">SESSIONS</CardTitle>
+        </CardHeader>
+        <CardContent className="p-4">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-white/5">
+                <TableHead className="text-gray-400 py-2">Started</TableHead>
+                <TableHead className="text-gray-400 py-2">Duration</TableHead>
+                <TableHead className="text-gray-400 py-2">Phone</TableHead>
+                <TableHead className="text-gray-400 py-2">Transcript</TableHead>
+                <TableHead className="text-gray-400 py-2">Commands</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="text-gray-200">
               {sessions.map((s) => {
                 const start = new Date(s.started_at);
                 const end = s.ended_at ? new Date(s.ended_at) : null;
-                const duration = end
-                  ? `${Math.round((end.getTime() - start.getTime()) / 1000)}s`
-                  : "ongoing";
+                const durationSecs = end
+                  ? Math.round((end.getTime() - start.getTime()) / 1000)
+                  : null;
+                const isOngoing = durationSecs === null;
 
                 return (
-                  <tr key={s.id} className="border-t border-white/5 align-top">
-                    <td className="py-2 whitespace-nowrap">{start.toLocaleString()}</td>
-                    <td className="py-2">{duration}</td>
-                    <td className="py-2">{s.phone_number ?? "—"}</td>
-                    <td className="py-2 max-w-xs truncate">{s.transcript ?? "—"}</td>
-                    <td className="py-2">{s.commands_executed ?? "—"}</td>
-                  </tr>
+                  <TableRow key={s.id} className="border-white/5 align-top">
+                    <TableCell className="py-2 whitespace-nowrap">{start.toLocaleString()}</TableCell>
+                    <TableCell className="py-2">
+                      {isOngoing ? (
+                        <Badge variant="outline" className="text-[10px] border-blue-500/20 bg-blue-500/15 text-blue-400">
+                          ongoing
+                        </Badge>
+                      ) : (
+                        `${durationSecs}s`
+                      )}
+                    </TableCell>
+                    <TableCell className="py-2">{s.phone_number ?? "—"}</TableCell>
+                    <TableCell className="py-2 max-w-xs truncate">{s.transcript ?? "—"}</TableCell>
+                    <TableCell className="py-2">{s.commands_executed ?? "—"}</TableCell>
+                  </TableRow>
                 );
               })}
               {sessions.length === 0 && (
-                <tr>
-                  <td className="py-3 text-gray-500" colSpan={5}>
+                <TableRow>
+                  <TableCell className="py-3 text-gray-500" colSpan={5}>
                     No call sessions yet.
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }

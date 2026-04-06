@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Click Counter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #fff;
+      gap: 2rem;
+      user-select: none;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 400;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      opacity: 0.7;
+    }
+
+    #count {
+      font-size: 6rem;
+      font-weight: 700;
+      transition: transform 0.1s ease;
+    }
+
+    #count.pop {
+      transform: scale(1.15);
+    }
+
+    button {
+      padding: 1rem 3rem;
+      font-size: 1.2rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      background: #6c63ff;
+      color: #fff;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    button:hover {
+      background: #5a52d5;
+    }
+
+    button:active {
+      transform: scale(0.96);
+    }
+
+    #reset {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      padding: 0.6rem 1.8rem;
+      font-size: 0.9rem;
+    }
+
+    #reset:hover {
+      border-color: rgba(255, 255, 255, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <h1>Click Counter</h1>
+  <div id="count">0</div>
+  <button id="click-btn">Click Me</button>
+  <button id="reset">Reset</button>
+
+  <script>
+    let count = 0;
+    const display = document.getElementById('count');
+    const clickBtn = document.getElementById('click-btn');
+    const resetBtn = document.getElementById('reset');
+
+    clickBtn.addEventListener('click', () => {
+      count++;
+      display.textContent = count;
+      display.classList.add('pop');
+      setTimeout(() => display.classList.remove('pop'), 100);
+    });
+
+    resetBtn.addEventListener('click', () => {
+      count = 0;
+      display.textContent = count;
+    });
+  </script>
+</body>
+</html>

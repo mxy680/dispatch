@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Click Counter</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #fff;
+        }
+
+        .container {
+            text-align: center;
+            padding: 3rem 4rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 24px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 400;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 2rem;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .count {
+            font-size: 7rem;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 2.5rem;
+            background: linear-gradient(to right, #a78bfa, #818cf8, #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            transition: transform 0.15s ease;
+        }
+
+        .count.pop {
+            transform: scale(1.15);
+        }
+
+        .buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        button {
+            padding: 0.85rem 2.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: 0.05em;
+        }
+
+        .btn-click {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-click:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 28px rgba(99, 102, 241, 0.55);
+        }
+
+        .btn-click:active {
+            transform: translateY(0);
+        }
+
+        .btn-reset {
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .btn-reset:hover {
+            background: rgba(255, 255, 255, 0.14);
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Click Counter</h1>
+        <div class="count" id="count">0</div>
+        <div class="buttons">
+            <button class="btn-click" id="clickBtn">Click Me</button>
+            <button class="btn-reset" id="resetBtn">Reset</button>
+        </div>
+    </div>
+
+    <script>
+        const countEl = document.getElementById('count');
+        const clickBtn = document.getElementById('clickBtn');
+        const resetBtn = document.getElementById('resetBtn');
+
+        async function loadCount() {
+            const res = await fetch('/api/count');
+            const data = await res.json();
+            countEl.textContent = data.count;
+        }
+
+        clickBtn.addEventListener('click', async () => {
+            const res = await fetch('/api/click', { method: 'POST' });
+            const data = await res.json();
+            countEl.textContent = data.count;
+            countEl.classList.add('pop');
+            setTimeout(() => countEl.classList.remove('pop'), 150);
+        });
+
+        resetBtn.addEventListener('click', async () => {
+            const res = await fetch('/api/reset', { method: 'POST' });
+            const data = await res.json();
+            countEl.textContent = data.count;
+        });
+
+        loadCount();
+    </script>
+</body>
+</html>

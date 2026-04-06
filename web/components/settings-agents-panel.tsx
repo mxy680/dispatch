@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type CompanionDeviceRow = {
   id: string;
@@ -147,11 +148,11 @@ export function SettingsAgentsPanel() {
             </div>
           </div>
           <div className="flex gap-2">
-            <input
+            <Input
               value={projectBasePath}
               onChange={(e) => setProjectBasePath(e.target.value)}
               placeholder="/absolute/path/to/projects"
-              className="flex-1 text-sm bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-supabase-green"
+              className="flex-1 text-sm bg-dark-bg border-dark-border text-white placeholder:text-gray-600 focus-visible:border-supabase-green"
             />
             <Button
               onClick={async () => {
@@ -248,8 +249,8 @@ export function SettingsAgentsPanel() {
                             {p.project_name || p.project_id}
                           </div>
                           <div className="mt-1 flex gap-2 items-start">
-                            <input
-                              className="flex-1 text-[11px] font-mono bg-dark-bg border border-dark-border rounded-md px-2 py-2 text-white"
+                            <Input
+                              className="flex-1 text-[11px] font-mono bg-dark-bg border-dark-border text-white"
                               value={p.local_path || ""}
                               placeholder="Paste absolute local_path (folder) for this device"
                               onChange={(e) => {

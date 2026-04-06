@@ -98,6 +98,7 @@ if DEVELOPMENT_MODE:
 # --- LOCAL IMPORTS ---
 from database import models
 from services.llm import parse_intent
+from services import phone_verification
 from services.telegram import send_telegram_message
 from agents.dispatcher import dispatch_task as agent_dispatch_task
 from agents.dispatcher import set_terminal_access, get_terminal_access
@@ -342,6 +343,16 @@ class CursorContextRequest(BaseModel):
     selection: str | None = None
     diagnostics: str | None = None
 
+
+class SendOtpRequest(BaseModel):
+    phone_number: str
+
+
+class VerifyOtpRequest(BaseModel):
+    phone_number: str
+    code: str
+
+
 def _require_project_owner(user_id: str, project_id: str) -> dict:
     project = models.get_project_by_id(project_id)
     if not project:
@@ -455,6 +466,41 @@ async def set_project_base_path(
 ):
     models.set_project_base_path_for_user(user.id, request.base_path)
     return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
+
+
+import re as _re
+
+_E164_RE = _re.compile(r"^\+[1-9]\d{1,14}$")
+
+
+@app.post("/api/phone/send-otp")
+async def send_otp(request: SendOtpRequest, user: dict = Depends(get_current_user)):
+    if not _E164_RE.match(request.phone_number):
+        raise HTTPException(status_code=400, detail="Phone number must be in E.164 format (e.g. +12125551234)")
+    success = phone_verification.send_verification(request.phone_number)
+    if not success:
+        raise HTTPException(status_code=502, detail="Failed to send verification code")
+    return {"success": True}
+
+
+@app.post("/api/phone/verify-otp")
+async def verify_otp(request: VerifyOtpRequest, user: dict = Depends(get_current_user)):
+    if not _E164_RE.match(request.phone_number):
+        raise HTTPException(status_code=400, detail="Phone number must be in E.164 format (e.g. +12125551234)")
+    approved = phone_verification.check_verification(request.phone_number, request.code)
+    if not approved:
+        return {"success": False, "error": "Invalid or expired verification code"}
+    try:
+        models.update_user_phone_number(user.id, request.phone_number)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    return {"success": True}
+
+
+@app.get("/api/phone/status")
+async def phone_status(user: dict = Depends(get_current_user)):
+    phone_number = models.get_user_phone_number(user.id)
+    return {"has_phone": bool(phone_number)}
 
 
 @app.post("/api/device/pair/start")
@@ -1526,7 +1572,7 @@ async def twilio_recording(request: Request, background_tasks: BackgroundTasks):
         # Create a task from the voice command
         logged_task_id = None
         if intent_type != "unknown":
-            logged_task_id = models.log_task(
+            logged_task_id = models.log_agent_event_task(
                 user_id=user_id,
                 project_name=project_name,
                 projects=user_projects,

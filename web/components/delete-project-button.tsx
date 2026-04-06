@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { authFetch } from "@/lib/supabase/access-token";
+import { Button } from "@/components/ui/button";
 
 export function DeleteProjectButton({ projectId }: { projectId: string }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
@@ -23,13 +24,15 @@ export function DeleteProjectButton({ projectId }: { projectId: string }) {
   };
 
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="sm"
       onClick={handleDelete}
       disabled={deleting}
-      className="text-xs text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-50"
+      className="text-xs text-muted-foreground hover:text-red-400 transition-colors"
       title="Delete project"
     >
       {deleting ? "..." : "×"}
-    </button>
+    </Button>
   );
 }
