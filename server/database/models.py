@@ -19,34 +19,104 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ==================== LOCAL TELEGRAM MAPPING ====================
+
+TELEGRAM_MAP_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "telegram_links.json")
+
+def _get_local_telegram_map() -> dict:
+    if not os.path.exists(TELEGRAM_MAP_FILE):
+        return {}
+    try:
+        with open(TELEGRAM_MAP_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("Failed to read local telegram map: %s", e)
+        return {}
+
+def _save_local_telegram_map(mapping: dict):
+    try:
+        with open(TELEGRAM_MAP_FILE, "w") as f:
+            json.dump(mapping, f, indent=2)
+    except Exception as e:
+        logger.error("Failed to save local telegram map: %s", e)
+
+def set_local_telegram_link(chat_id: str | int, email: str):
+    """Associate a chat_id with an email in a local storage."""
+    mapping = _get_local_telegram_map()
+    mapping[str(chat_id)] = email.lower().strip()
+    _save_local_telegram_map(mapping)
+    
+    # Also ensure the user exists in the DB
+    u = get_user_by_email(email)
+    if not u:
+        upsert_user(user_id=str(uuid.uuid4()), email=email)
+
+def get_user_by_email(email: str) -> dict | None:
+    sb = get_sb()
+    res = sb.table("users").select("*").eq("email", email.lower().strip()).maybe_single().execute()
+    return res.data if res else None
+
+
+
 # ==================== USERS ====================
 
 def upsert_user(user_id: str, email: str, phone_number: str | None = None, telegram_chat_id: str | None = None):
     sb = get_sb()
-    # Check if user already exists — if so, just update.
-    existing = sb.table("users").select("id").eq("id", user_id).maybe_single().execute()
-    if existing and existing.data:
-        update = {"email": email}
-        if phone_number:
-            update["phone_number"] = phone_number
-        if telegram_chat_id:
-            update["telegram_chat_id"] = str(telegram_chat_id)
-        sb.table("users").update(update).eq("id", user_id).execute()
-    else:
-        data = {"id": user_id, "email": email}
-        if phone_number:
-            data["phone_number"] = phone_number
-        if telegram_chat_id:
-            data["telegram_chat_id"] = str(telegram_chat_id)
-        sb.table("users").insert(data).execute()
-    logger.debug("upsert_user user_id=%s email=%r phone=%r telegram=%r", user_id, email, phone_number, telegram_chat_id)
+    try:
+        # Check if user already exists — if so, just update.
+        existing = sb.table("users").select("id").eq("id", user_id).maybe_single().execute()
+        if existing and existing.data:
+            update = {"email": email}
+            # Add optional columns only if they exist in the schema OR wrap in try/except
+            if phone_number:
+                update["phone_number"] = phone_number
+            if telegram_chat_id:
+                update["telegram_chat_id"] = str(telegram_chat_id)
+            
+            try:
+                sb.table("users").update(update).eq("id", user_id).execute()
+            except Exception as e:
+                # If specific columns fail, retry with just email
+                logger.warning("Failed to update user with all fields (maybe missing columns?): %s", e)
+                sb.table("users").update({"email": email}).eq("id", user_id).execute()
+        else:
+            data = {"id": user_id, "email": email}
+            if phone_number:
+                data["phone_number"] = phone_number
+            if telegram_chat_id:
+                data["telegram_chat_id"] = str(telegram_chat_id)
+            
+            try:
+                sb.table("users").insert(data).execute()
+            except Exception as e:
+                # If specific columns fail, retry with just id and email
+                logger.warning("Failed to insert user with all fields (maybe missing columns?): %s", e)
+                sb.table("users").insert({"id": user_id, "email": email}).execute()
+        
+        logger.debug("upsert_user user_id=%s email=%r phone=%r telegram=%r", user_id, email, phone_number, telegram_chat_id)
+    except Exception as e:
+        logger.error("Critical error in upsert_user: %s", e)
+        raise
 
 def get_user_id_by_telegram_chat_id(chat_id: str | int) -> str | None:
     """Look up a user by their telegram chat_id."""
+    # 1. Check local mapping first (fallback for missing DB column)
+    mapping = _get_local_telegram_map()
+    linked_email = mapping.get(str(chat_id))
+    if linked_email:
+        user = get_user_by_email(linked_email)
+        if user:
+            return user["id"]
+
+    # 2. Check DB column (legacy/alternative)
     sb = get_sb()
-    res = sb.table("users").select("id").eq("telegram_chat_id", str(chat_id)).maybe_single().execute()
-    data = res.data if res else None
-    return data["id"] if data else None
+    try:
+        res = sb.table("users").select("id").eq("telegram_chat_id", str(chat_id)).limit(1).execute()
+        data = res.data[0] if res.data else None
+        return data["id"] if data else None
+    except Exception as e:
+        logger.warning("Failed to look up user by telegram_chat_id (maybe column missing?): %s", e)
+        return None
 
 
 # ==================== PROJECTS ====================
@@ -117,14 +187,14 @@ def get_user_projects(user_id):
 
 def get_project_by_id(project_id):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("id", project_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("projects").select("*").eq("id", project_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def get_project_by_name(user_id, name):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
@@ -181,8 +251,8 @@ def _ensure_user_preferences_row(user_id: str) -> None:
 def get_user_preferences(user_id: str) -> dict:
     _ensure_user_preferences_row(user_id)
     sb = get_sb()
-    res = sb.table("user_preferences").select("*").eq("user_id", user_id).maybe_single().execute()
-    return res.data if res and res.data else {"user_id": user_id}
+    res = sb.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
+    return res.data[0] if res.data else {"user_id": user_id}
 
 
 def get_default_provider_for_user(user_id: str) -> str:
@@ -352,8 +422,8 @@ def update_task_status(task_id, status):
 
 def get_task_by_id(task_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("tasks").select("*").eq("id", task_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("tasks").select("*").eq("id", task_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> None:
@@ -366,8 +436,8 @@ def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> 
 def get_user_id_by_phone(phone_number: str) -> str | None:
     """Look up a user by their phone number."""
     sb = get_sb()
-    res = sb.table("users").select("id").eq("phone_number", phone_number).maybe_single().execute()
-    data = res.data if res else None
+    res = sb.table("users").select("id").eq("phone_number", phone_number).limit(1).execute()
+    data = res.data[0] if res.data else None
     return data["id"] if data else None
 
 def create_call_session(user_id, phone_number):
@@ -567,8 +637,8 @@ def register_instance(
 
 def get_instance_by_id(instance_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("instances").select("*").eq("id", instance_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("instances").select("*").eq("id", instance_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def update_instance_heartbeat(*, instance_id: str, status: str = "online") -> None:
@@ -655,8 +725,8 @@ def bind_terminal_session_instance(session_id: str, instance_id: str | None) -> 
 
 def get_terminal_session(session_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("terminal_sessions").select("*").eq("id", session_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("terminal_sessions").select("*").eq("id", session_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list[dict]:
@@ -717,8 +787,8 @@ def list_terminal_commands_for_session(*, user_id: str, session_id: str, limit: 
 
 def get_terminal_command(command_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def get_or_create_terminal_session_for_project(
@@ -832,10 +902,9 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    cmd = cmd_res.data if cmd_res else None
+    cmd = cmd_res.data[0] if cmd_res.data else None
     if not cmd:
         return None
 
@@ -846,19 +915,19 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
     }).eq("id", cmd["id"]).eq("status", "queued").execute()
 
     # Re-fetch to confirm claim.
-    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).maybe_single().execute()
-    verified = verify_res.data if verify_res else None
+    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).limit(1).execute()
+    verified = verify_res.data[0] if verify_res.data else None
     if not verified or verified.get("status") != "running":
         return None
 
     # Attach project file_path so the agent knows where to run.
     session_id = verified.get("session_id")
     if session_id:
-        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).maybe_single().execute()
+        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).limit(1).execute()
         if sess_res and sess_res.data:
-            proj_res = sb.table("projects").select("file_path").eq("id", sess_res.data["project_id"]).maybe_single().execute()
+            proj_res = sb.table("projects").select("file_path").eq("id", sess_res.data[0]["project_id"]).limit(1).execute()
             if proj_res and proj_res.data:
-                verified["project_path"] = proj_res.data.get("file_path")
+                verified["project_path"] = proj_res.data[0].get("file_path")
 
     return verified
 
@@ -943,10 +1012,9 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    cmd = cmd_res.data if cmd_res else None
+    cmd = cmd_res.data[0] if cmd_res.data else None
     if not cmd:
         return None
 
@@ -959,8 +1027,8 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
     }).eq("id", command_id).eq("status", "queued").execute()
 
     # Re-fetch to confirm claim succeeded.
-    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
-    verified = verify_res.data if verify_res else None
+    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
+    verified = verify_res.data[0] if verify_res.data else None
     if not verified or verified.get("status") != "running":
         return None
 
@@ -1019,10 +1087,9 @@ def get_user_id_for_agent_token(token: str) -> str | None:
         .eq("token_hash", token_hash)
         .is_("revoked_at", "null")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    data = res.data if res else None
+    data = res.data[0] if res.data else None
     if not data:
         return None
     token_id = data["id"]
@@ -1061,10 +1128,9 @@ def complete_device_pairing(*, pairing_code: str, device_name: str | None = None
         .eq("status", "pending")
         .order("created_at", desc=True)
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    device = res.data if res else None
+    device = res.data[0] if res.data else None
     if not device:
         return None
     expires_at = device.get("pairing_expires_at")
@@ -1090,8 +1156,8 @@ def complete_device_pairing(*, pairing_code: str, device_name: str | None = None
 def get_device_by_token(device_token: str) -> dict | None:
     sb = get_sb()
     token_hash = _hash_device_token(device_token)
-    res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def touch_device_heartbeat(device_id: str) -> None:
@@ -1122,10 +1188,10 @@ def link_device_project(*, device_id: str, project_id: str, local_path: str | No
         .eq("device_id", device_id)
         .eq("project_id", project_id)
         .limit(1)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    existing = res.data if res else None
+    existing = res.data[0] if res.data else None
     if existing:
         if local_path and existing.get("local_path") != local_path:
             sb.table("device_project_links").update({"local_path": local_path}).eq("id", existing["id"]).execute()
@@ -1153,10 +1219,10 @@ def _link_device_project_local_path_if_missing(*, device_id: str, project_id: st
         .eq("device_id", device_id)
         .eq("project_id", project_id)
         .limit(1)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    existing = res.data if res else None
+    existing = res.data[0] if res.data else None
 
     if existing:
         if not existing.get("local_path"):
@@ -1233,10 +1299,10 @@ def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None
         .eq("project_id", project_id)
         .order("created_at", desc=True)
         .limit(1)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    return res.data if res else None
+    return res.data[0] if res.data else None
 
 
 # ==================== USER DATA DELETION ====================

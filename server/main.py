@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import uuid
+import re
 from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi import Response, Request
@@ -219,6 +220,7 @@ def get_current_agent_user_id(
     """
     if not x_agent_token:
         raise HTTPException(status_code=401, detail="Missing X-Agent-Token")
+    
     user_id = models.get_user_id_for_agent_token(x_agent_token)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid agent token")
@@ -867,6 +869,17 @@ async def telegram_webhook(
         if not chat_id or not text:
             return {"status": "ignored", "reason": "Empty chat_id or text"}
             
+        # 0. Dynamic Account Linking: If the user texts an email, link it!
+        if "@" in text and "." in text and len(text.split()) == 1:
+            if re.match(r"[^@]+@[^@]+\.[^@]+", text):
+                email = text.lower()
+                models.set_local_telegram_link(chat_id, email)
+                await send_telegram_message(
+                    chat_id, 
+                    f"✅ Successfully linked your Telegram to {email}!\n\nAll tasks you create here will now appear in your dashboard when you sign in with Google."
+                )
+                return {"status": "success", "action": "linked_account"}
+
         # 1. Authenticate user by chat_id
         user_id = models.get_user_id_by_telegram_chat_id(chat_id)
         if not user_id:

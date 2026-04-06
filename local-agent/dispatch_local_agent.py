@@ -115,7 +115,8 @@ def main() -> int:
         print(f"[local-agent] ERROR: project path not found: {project_path}", file=sys.stderr)
         return 2
 
-    instance_token = args.instance_token or os.uname().nodename
+    import platform
+    instance_token = args.instance_token or platform.node()
     cfg = Config(
         backend_url=args.backend_url.rstrip("/"),
         project_id=args.project_id,
@@ -133,7 +134,7 @@ def main() -> int:
         "instance_token": cfg.instance_token,
         "pid": os.getpid(),
         "metadata": {
-            "hostname": os.uname().nodename,
+            "hostname": platform.node(),
             "platform": sys.platform,
             "cwd": os.getcwd(),
         },

@@ -15,11 +15,21 @@ _client: AsyncOpenAI | None = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
+        # Try Groq first
         api_key = os.environ.get("GROQ_API_KEY", "")
+        base_url = "https://api.groq.com/openai/v1"
+        
+        # Fallback to OpenRouter
         if not api_key:
-            raise RuntimeError("GROQ_API_KEY is not set")
+            api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            base_url = "https://openrouter.ai/api/v1"
+            logger.info("GROQ_API_KEY missing, falling back to OpenRouter")
+            
+        if not api_key:
+            raise RuntimeError("Neither GROQ_API_KEY nor OPENROUTER_API_KEY is set")
+            
         _client = AsyncOpenAI(
-            base_url="https://api.groq.com/openai/v1",
+            base_url=base_url,
             api_key=api_key,
         )
     return _client
@@ -48,7 +58,11 @@ async def parse_intent(text: str, projects: list):
     User Command: "{text}"
     """
 
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = os.environ.get("GROQ_MODEL") or os.environ.get("OPENROUTER_MODEL") or "llama-3.3-70b-versatile"
+    # Note: OpenRouter might need different model names, but llama-3.3-70b-versatile is often supported/aliased.
+    # On OpenRouter, it's usually meta-llama/llama-3.3-70b-instruct
+    if "openrouter.ai" in str(_get_client().base_url) and "/" not in model:
+         model = "meta-llama/llama-3.3-70b-instruct"
 
     try:
         client = _get_client()
