@@ -889,6 +889,55 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
     return verified
 
 
+def claim_next_queued_command_for_instance(*, instance_id: str) -> dict | None:
+    """Claim the oldest queued terminal command for a particular instance."""
+    sb = get_sb()
+
+    # Find all sessions assigned to this instance.
+    sessions_res = (
+        sb.table("terminal_sessions")
+        .select("id, project_id, name")
+        .eq("instance_id", instance_id)
+        .execute()
+    )
+    sessions = sessions_res.data if sessions_res else []
+    if not sessions:
+        return None
+
+    session_ids = [s["id"] for s in sessions]
+    session_project_map = {s["id"]: s["project_id"] for s in sessions}
+
+    cmd_res = (
+        sb.table("terminal_commands")
+        .select("*")
+        .in_("session_id", session_ids)
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    cmd = cmd_res.data if cmd_res else None
+    if not cmd:
+        return None
+
+    command_id = cmd["id"]
+    sb.table("terminal_commands").update({
+        "status": "running",
+        "started_at": _now_iso(),
+    }).eq("id", command_id).eq("status", "queued").execute()
+
+    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
+    verified = verify_res.data if verify_res else None
+    if not verified or verified.get("status") != "running":
+        return None
+
+    return {
+        **verified,
+        "project_id": session_project_map.get(cmd["session_id"]),
+    }
+
+
 def complete_terminal_command(
     *,
     command_id: str,

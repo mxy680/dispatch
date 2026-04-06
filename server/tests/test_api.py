@@ -19,6 +19,8 @@ from fastapi.testclient import TestClient
 
 # Enable dev-mode mock user BEFORE importing main so get_current_user sees it
 os.environ.setdefault("DEVELOPMENT_MODE", "true")
+# Ensure Telegram webhook tests run in dev mode even when a local .env defines a secret.
+os.environ["TELEGRAM_SECRET_TOKEN"] = ""
 
 from main import app  # noqa: E402
 

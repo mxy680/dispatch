@@ -15,6 +15,8 @@ import shutil
 _PROVIDER_ALIASES: dict[str, str] = {
     "cursor": "cursor",
     "cursor-agent": "cursor",
+    "n/a": "cursor",
+    "copilot": "cursor",
     "claude": "claude",
     "claude-code": "claude",
     "shell": "shell",
