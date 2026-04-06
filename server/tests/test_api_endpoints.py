@@ -9,7 +9,7 @@ as a Supabase client, returning controllable data.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -150,7 +150,8 @@ class TestUnifiedCommandsEndpoints:
         session = _make_session()
         cmd_id = "cmd-new"
 
-        with patch("database.models.get_project_by_id", return_value=project), \
+        with patch("main._background_security_scan", new=AsyncMock()), \
+             patch("database.models.get_project_by_id", return_value=project), \
              patch("database.models.get_default_provider_for_user", return_value="claude"), \
              patch("database.models.get_or_create_terminal_session_for_project", return_value=session), \
              patch("database.models.create_terminal_command", return_value=cmd_id), \
@@ -170,7 +171,8 @@ class TestUnifiedCommandsEndpoints:
     def test_queue_command_empty_prompt_returns_400(self):
         project = _make_project()
 
-        with patch("database.models.get_project_by_id", return_value=project), \
+        with patch("main._background_security_scan", new=AsyncMock()), \
+             patch("database.models.get_project_by_id", return_value=project), \
              patch("database.models.get_default_provider_for_user", return_value="claude"), \
              patch("database.models.add_conversation_turn"), \
              patch("database.models.upsert_conversation_state"):
@@ -182,7 +184,8 @@ class TestUnifiedCommandsEndpoints:
         assert response.status_code == 400
 
     def test_queue_command_unknown_project_returns_404(self):
-        with patch("database.models.get_project_by_id", return_value=None), \
+        with patch("main._background_security_scan", new=AsyncMock()), \
+             patch("database.models.get_project_by_id", return_value=None), \
              patch("database.models.add_conversation_turn"), \
              patch("database.models.upsert_conversation_state"):
             response = client.post(
@@ -208,7 +211,8 @@ class TestUnifiedCommandsEndpoints:
         project = _make_project()
         session = _make_session()
         cmd_id = "cmd-pa"
-        with patch("database.models.get_project_by_id", return_value=project), \
+        with patch("main._background_security_scan", new=AsyncMock()), \
+             patch("database.models.get_project_by_id", return_value=project), \
              patch("database.models.get_default_provider_for_user", return_value="claude"), \
              patch("database.models.get_or_create_terminal_session_for_project", return_value=session), \
              patch("database.models.create_terminal_command", return_value=cmd_id) as create_cmd, \
@@ -235,6 +239,64 @@ class TestUnifiedCommandsEndpoints:
 
         assert response.status_code == 200
         assert response.json()["command"]["status"] == "queued"
+
+    def test_unified_reply_blocks_voice_approve_when_high_risk(self):
+        cmd = {
+            "id": "cmd-1",
+            "user_id": USER_ID,
+            "session_id": "sess-1",
+            "status": "pending_approval",
+            "risk_level": "HIGH_RISK",
+            "provider": "shell",
+        }
+        state = {
+            "user_id": USER_ID,
+            "project_id": "proj-1",
+            "state": "awaiting_approval",
+            "active_command_id": "cmd-1",
+            "context_json": "{}",
+        }
+        project = _make_project()
+        with patch("database.models.get_project_by_id", return_value=project), \
+             patch("database.models.get_conversation_state", return_value=state), \
+             patch("database.models.get_terminal_command", return_value=cmd), \
+             patch("database.models.add_conversation_turn"):
+            response = client.post(
+                "/api/unified/reply",
+                json={"project_id": "proj-1", "reply": "yes, execute"},
+            )
+        assert response.status_code == 403
+        assert "Approve" in response.json().get("detail", "")
+
+    def test_unified_reply_yes_with_question_mark_approves(self):
+        cmd = {
+            "id": "cmd-1",
+            "user_id": USER_ID,
+            "session_id": "sess-1",
+            "status": "pending_approval",
+            "risk_level": "SAFE",
+            "provider": "shell",
+        }
+        state = {
+            "user_id": USER_ID,
+            "project_id": "proj-1",
+            "state": "awaiting_approval",
+            "active_command_id": "cmd-1",
+            "context_json": "{}",
+        }
+        project = _make_project()
+        with patch("database.models.get_project_by_id", return_value=project), \
+             patch("database.models.get_conversation_state", return_value=state), \
+             patch("database.models.get_terminal_command", return_value=cmd), \
+             patch("database.models.update_terminal_command_for_approval", return_value={**cmd, "status": "queued"}), \
+             patch("database.models.add_conversation_turn"), \
+             patch("database.models.upsert_conversation_state"):
+            response = client.post(
+                "/api/unified/reply",
+                json={"project_id": "proj-1", "reply": "yes?"},
+            )
+        assert response.status_code == 200
+        assert response.json()["intent"] == "approve"
 
 
 # ---------------------------------------------------------------------------

@@ -20,3 +20,4 @@ server/__pycache__/main.cpython-310.pyc
 .cursor/plans/voice_approval_gate_rollout_c5254f60.plan.md
 server/__pycache__/main.cpython-310.pyc
 /server/__pycache__
+server/data/*.db

@@ -172,7 +172,9 @@ class TestCallSessions:
 class TestApprovalConversationModels:
     def test_create_terminal_command_accepts_pending_approval_status(self):
         sb = _mock_sb([])
-        with patch("database.models.get_sb", return_value=sb):
+        with patch("database.models.get_sb", return_value=sb), patch(
+            "database.sidecar_store.set_command_risk"
+        ) as risk_mock:
             cid = models.create_terminal_command(
                 session_id="s1",
                 user_id="u1",
@@ -182,10 +184,24 @@ class TestApprovalConversationModels:
         assert cid
         payload = sb.table.return_value.insert.call_args[0][0]
         assert payload["status"] == "pending_approval"
+        assert "risk_level" not in payload
+        risk_mock.assert_called_once_with(
+            command_id=cid, user_id="u1", risk_level="PENDING", risk_reason=None
+        )
 
     def test_add_conversation_turn_writes_expected_fields(self):
-        sb = _mock_sb([])
-        with patch("database.models.get_sb", return_value=sb):
+        with patch("database.sidecar_store.add_conversation_turn") as add_turn:
+            add_turn.return_value = {
+                "id": "t1",
+                "user_id": "u1",
+                "project_id": "p1",
+                "session_id": "s1",
+                "command_id": "c1",
+                "role": "assistant",
+                "turn_type": "approval_request",
+                "content": "Approve this command",
+                "created_at": "2024-01-01T00:00:00+00:00",
+            }
             row = models.add_conversation_turn(
                 user_id="u1",
                 project_id="p1",
@@ -195,5 +211,14 @@ class TestApprovalConversationModels:
                 turn_type="approval_request",
                 content="Approve this command",
             )
+        add_turn.assert_called_once_with(
+            user_id="u1",
+            project_id="p1",
+            session_id="s1",
+            command_id="c1",
+            role="assistant",
+            turn_type="approval_request",
+            content="Approve this command",
+        )
         assert row["role"] == "assistant"
         assert row["turn_type"] == "approval_request"

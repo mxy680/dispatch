@@ -3,6 +3,7 @@ from __future__ import annotations
 # server/database/models.py
 """Database operations via Supabase PostgREST client."""
 from database.supabase_client import get_sb
+from database import sidecar_store as _sidecar
 import uuid
 import json
 from datetime import datetime, timezone, timedelta
@@ -14,6 +15,27 @@ import re
 
 logger = logging.getLogger("callstack.db")
 
+def _normalize_conversation_state_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    if row.get("project_id") == "":
+        return {**row, "project_id": None}
+    return row
+
+
+def _first_or_none(res) -> dict | None:
+    """PostgREST returns 406 when .maybe_single() gets 0 rows (single-object Accept). Use limit(1) + this."""
+    if res is None:
+        return None
+    data = getattr(res, "data", None)
+    if data is None:
+        return None
+    if isinstance(data, list):
+        return data[0] if data else None
+    if isinstance(data, dict):
+        return data
+    return None
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -24,7 +46,7 @@ def _now_iso() -> str:
 def upsert_user(user_id: str, email: str, phone_number: str | None = None, telegram_chat_id: str | None = None):
     sb = get_sb()
     # Check if user already exists — if so, just update.
-    existing = sb.table("users").select("id").eq("id", user_id).maybe_single().execute()
+    existing = sb.table("users").select("id").eq("id", user_id).limit(1).execute()
     if existing and existing.data:
         update = {"email": email}
         if phone_number:
@@ -44,8 +66,8 @@ def upsert_user(user_id: str, email: str, phone_number: str | None = None, teleg
 def get_user_id_by_telegram_chat_id(chat_id: str | int) -> str | None:
     """Look up a user by their telegram chat_id."""
     sb = get_sb()
-    res = sb.table("users").select("id").eq("telegram_chat_id", str(chat_id)).maybe_single().execute()
-    data = res.data if res else None
+    res = sb.table("users").select("id").eq("telegram_chat_id", str(chat_id)).limit(1).execute()
+    data = _first_or_none(res)
     return data["id"] if data else None
 
 
@@ -68,9 +90,10 @@ def update_user_phone_number(user_id: str, phone_number: str) -> None:
 def get_user_phone_number(user_id: str) -> str | None:
     """Return the phone_number for a user, or None if not set."""
     sb = get_sb()
-    result = sb.table("users").select("phone_number").eq("id", user_id).maybe_single().execute()
-    if result and result.data:
-        return result.data.get("phone_number")
+    result = sb.table("users").select("phone_number").eq("id", user_id).limit(1).execute()
+    row = _first_or_none(result)
+    if row:
+        return row.get("phone_number")
     return None
 
 
@@ -142,14 +165,14 @@ def get_user_projects(user_id):
 
 def get_project_by_id(project_id):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("id", project_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("projects").select("*").eq("id", project_id).limit(1).execute()
+    return _first_or_none(res)
 
 
 def get_project_by_name(user_id, name):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name).limit(1).execute()
+    return _first_or_none(res)
 
 
 def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
@@ -206,8 +229,8 @@ def _ensure_user_preferences_row(user_id: str) -> None:
 def get_user_preferences(user_id: str) -> dict:
     _ensure_user_preferences_row(user_id)
     sb = get_sb()
-    res = sb.table("user_preferences").select("*").eq("user_id", user_id).maybe_single().execute()
-    return res.data if res and res.data else {"user_id": user_id}
+    res = sb.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
+    return _first_or_none(res) or {"user_id": user_id}
 
 
 def get_default_provider_for_user(user_id: str) -> str:
@@ -377,8 +400,8 @@ def update_task_status(task_id, status):
 
 def get_task_by_id(task_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("tasks").select("*").eq("id", task_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("tasks").select("*").eq("id", task_id).limit(1).execute()
+    return _first_or_none(res)
 
 
 def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> None:
@@ -391,8 +414,8 @@ def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> 
 def get_user_id_by_phone(phone_number: str) -> str | None:
     """Look up a user by their phone number."""
     sb = get_sb()
-    res = sb.table("users").select("id").eq("phone_number", phone_number).maybe_single().execute()
-    data = res.data if res else None
+    res = sb.table("users").select("id").eq("phone_number", phone_number).limit(1).execute()
+    data = _first_or_none(res)
     return data["id"] if data else None
 
 def create_call_session(user_id, phone_number):
@@ -500,8 +523,8 @@ def get_agent_executions(task_id: str) -> list:
 
 def get_task_agent_status(task_id: str) -> dict:
     sb = get_sb()
-    res = sb.table("agent_executions").select("*").eq("task_id", task_id).order("created_at", desc=True).limit(1).maybe_single().execute()
-    return (res.data if res else None) or {"status": "none", "stage": "none"}
+    res = sb.table("agent_executions").select("*").eq("task_id", task_id).order("created_at", desc=True).limit(1).execute()
+    return _first_or_none(res) or {"status": "none", "stage": "none"}
 
 
 def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
@@ -554,7 +577,6 @@ def register_instance(
             .eq("user_id", user_id)
             .eq("instance_token", instance_token)
             .limit(1)
-            .maybe_single()
             .execute()
         )
         existing = res.data if res else None
@@ -586,13 +608,13 @@ def register_instance(
             insert_data["project_id"] = project_id
         sb.table("instances").insert(insert_data).execute()
 
-    res = sb.table("instances").select("*").eq("id", instance_id).maybe_single().execute()
+    res = sb.table("instances").select("*").eq("id", instance_id).limit(1).execute()
     return (res.data if res else None) or {"id": instance_id}
 
 
 def get_instance_by_id(instance_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("instances").select("*").eq("id", instance_id).maybe_single().execute()
+    res = sb.table("instances").select("*").eq("id", instance_id).limit(1).execute()
     return res.data if res else None
 
 
@@ -680,8 +702,8 @@ def bind_terminal_session_instance(session_id: str, instance_id: str | None) -> 
 
 def get_terminal_session(session_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("terminal_sessions").select("*").eq("id", session_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("terminal_sessions").select("*").eq("id", session_id).limit(1).execute()
+    return _first_or_none(res)
 
 
 def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list[dict]:
@@ -722,6 +744,9 @@ def create_terminal_command(
         "normalized_command": normalized,
         "status": status,
     }).execute()
+    _sidecar.set_command_risk(
+        command_id=command_id, user_id=user_id, risk_level="PENDING", risk_reason=None
+    )
     # Update session timestamp (non-transactional, cosmetic)
     sb.table("terminal_sessions").update({"updated_at": _now_iso()}).eq("id", session_id).execute()
     return command_id
@@ -738,13 +763,13 @@ def list_terminal_commands_for_session(*, user_id: str, session_id: str, limit: 
         .limit(limit)
         .execute()
     )
-    return res.data or []
+    return _sidecar.enrich_commands(res.data or [])
 
 
 def get_terminal_command(command_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
+    return _sidecar.enrich_command(_first_or_none(res))
 
 
 def get_or_create_terminal_session_for_project(
@@ -766,10 +791,9 @@ def get_or_create_terminal_session_for_project(
         .eq("name", name)
         .order("updated_at", desc=True)
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    session = res.data if res else None
+    session = _first_or_none(res)
 
     if session:
         if not session.get("instance_id") and instance_id:
@@ -818,7 +842,7 @@ def list_recent_terminal_commands_for_user(
             "session_name": session_name,
             "project_name": project_name,
         })
-    return result
+    return _sidecar.enrich_commands(result)
 
 
 def _expire_stale_running_commands(user_id: str, stale_minutes: int = 5) -> None:
@@ -858,10 +882,9 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    cmd = cmd_res.data if cmd_res else None
+    cmd = _first_or_none(cmd_res)
     if not cmd:
         return None
 
@@ -872,21 +895,24 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
     }).eq("id", cmd["id"]).eq("status", "queued").execute()
 
     # Re-fetch to confirm claim.
-    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).maybe_single().execute()
-    verified = verify_res.data if verify_res else None
+    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).limit(1).execute()
+    verified = _first_or_none(verify_res)
     if not verified or verified.get("status") != "running":
         return None
 
     # Attach project file_path so the agent knows where to run.
     session_id = verified.get("session_id")
     if session_id:
-        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).maybe_single().execute()
-        if sess_res and sess_res.data:
-            proj_res = sb.table("projects").select("file_path").eq("id", sess_res.data["project_id"]).maybe_single().execute()
-            if proj_res and proj_res.data:
-                verified["project_path"] = proj_res.data.get("file_path")
+        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).limit(1).execute()
+        sess_row = _first_or_none(sess_res)
+        if sess_row:
+            pid = sess_row.get("project_id")
+            proj_res = sb.table("projects").select("file_path").eq("id", pid).limit(1).execute()
+            proj_row = _first_or_none(proj_res)
+            if proj_row:
+                verified["project_path"] = proj_row.get("file_path")
 
-    return verified
+    return _sidecar.enrich_command(verified)
 
 
 def complete_terminal_command(
@@ -909,6 +935,7 @@ def update_terminal_command_for_approval(
     status: str,
     command: str | None = None,
     normalized_command: str | None = None,
+    reset_risk_pending: bool = False,
 ) -> dict | None:
     sb = get_sb()
     payload = {"status": status}
@@ -917,8 +944,39 @@ def update_terminal_command_for_approval(
     if normalized_command is not None:
         payload["normalized_command"] = normalized_command
     sb.table("terminal_commands").update(payload).eq("id", command_id).execute()
-    res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
-    return res.data if res else None
+    if reset_risk_pending:
+        uid_row = _first_or_none(
+            sb.table("terminal_commands").select("user_id").eq("id", command_id).limit(1).execute()
+        )
+        if uid_row:
+            _sidecar.reset_command_risk_pending(command_id=command_id, user_id=uid_row["user_id"])
+    res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
+    return _sidecar.enrich_command(_first_or_none(res))
+
+
+def update_command_risk_assessment(
+    *,
+    command_id: str,
+    risk_level: str,
+    risk_reason: str | None,
+    user_id: str | None = None,
+) -> None:
+    level = (risk_level or "PENDING").strip().upper()
+    if level not in {"PENDING", "SAFE", "WARNING", "HIGH_RISK"}:
+        level = "WARNING"
+    uid = user_id
+    if not uid:
+        sb = get_sb()
+        row = _first_or_none(
+            sb.table("terminal_commands").select("user_id").eq("id", command_id).limit(1).execute()
+        )
+        uid = row["user_id"] if row else ""
+    if not uid:
+        logger.warning("update_command_risk_assessment: missing user_id for command_id=%s", command_id)
+        return
+    _sidecar.set_command_risk(
+        command_id=command_id, user_id=uid, risk_level=level, risk_reason=risk_reason
+    )
 
 
 def append_terminal_log_chunk(
@@ -963,49 +1021,25 @@ def add_conversation_turn(
     turn_type: str,
     content: str,
 ) -> dict:
-    sb = get_sb()
-    turn_id = str(uuid.uuid4())
-    row = {
-        "id": turn_id,
-        "user_id": user_id,
-        "project_id": project_id,
-        "session_id": session_id,
-        "command_id": command_id,
-        "role": role,
-        "turn_type": turn_type,
-        "content": content,
-    }
-    sb.table("conversation_turns").insert(row).execute()
-    return row
+    return _sidecar.add_conversation_turn(
+        user_id=user_id,
+        project_id=project_id,
+        session_id=session_id,
+        command_id=command_id,
+        role=role,
+        turn_type=turn_type,
+        content=content,
+    )
 
 
 def list_conversation_turns_for_user(*, user_id: str, project_id: str | None = None, limit: int = 100) -> list[dict]:
-    sb = get_sb()
-    try:
-        q = sb.table("conversation_turns").select("*").eq("user_id", user_id)
-        if project_id:
-            q = q.eq("project_id", project_id)
-        res = q.order("created_at", desc=True).limit(limit).execute()
-        rows = res.data or []
-        return list(reversed(rows))
-    except Exception as e:
-        # In hosted Supabase, the table might not exist yet; fail soft with empty thread.
-        err = str(e).lower()
-        if "conversation_turns" in err and ("pgrst205" in err or "not find the table" in err):
-            logger.warning("conversation_turns table missing; returning empty thread for user_id=%s", user_id)
-            return []
-        raise
+    return _sidecar.list_conversation_turns_for_user(user_id=user_id, project_id=project_id, limit=limit)
 
 
 def get_conversation_state(*, user_id: str, project_id: str | None) -> dict | None:
-    sb = get_sb()
-    q = sb.table("conversation_state").select("*").eq("user_id", user_id)
-    if project_id:
-        q = q.eq("project_id", project_id)
-    else:
-        q = q.is_("project_id", "null")
-    res = q.limit(1).maybe_single().execute()
-    return res.data if res else None
+    return _normalize_conversation_state_row(
+        _sidecar.get_conversation_state(user_id=user_id, project_id=project_id)
+    )
 
 
 def upsert_conversation_state(
@@ -1016,25 +1050,14 @@ def upsert_conversation_state(
     active_command_id: str | None,
     context_json: dict | None = None,
 ) -> dict:
-    sb = get_sb()
-    existing = get_conversation_state(user_id=user_id, project_id=project_id)
-    payload = {
-        "user_id": user_id,
-        "project_id": project_id,
-        "state": state,
-        "active_command_id": active_command_id,
-        "context_json": json.dumps(context_json or {}),
-        "updated_at": _now_iso(),
-    }
-    if existing:
-        sb.table("conversation_state").update(payload).eq("id", existing["id"]).execute()
-        res = sb.table("conversation_state").select("*").eq("id", existing["id"]).maybe_single().execute()
-        return (res.data if res else None) or {**payload, "id": existing["id"]}
-
-    state_id = str(uuid.uuid4())
-    payload["id"] = state_id
-    sb.table("conversation_state").insert(payload).execute()
-    return payload
+    row = _sidecar.upsert_conversation_state(
+        user_id=user_id,
+        project_id=project_id,
+        state=state,
+        active_command_id=active_command_id,
+        context_json=context_json,
+    )
+    return _normalize_conversation_state_row(row) or row
 
 
 def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
@@ -1071,10 +1094,9 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    cmd = cmd_res.data if cmd_res else None
+    cmd = _first_or_none(cmd_res)
     if not cmd:
         return None
 
@@ -1087,15 +1109,15 @@ def claim_next_queued_command_for_device(*, device_id: str) -> dict | None:
     }).eq("id", command_id).eq("status", "queued").execute()
 
     # Re-fetch to confirm claim succeeded.
-    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).maybe_single().execute()
-    verified = verify_res.data if verify_res else None
+    verify_res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
+    verified = _first_or_none(verify_res)
     if not verified or verified.get("status") != "running":
         return None
 
     # Attach project_id and local_path.
     project_id = session_project_map.get(cmd["session_id"])
     return {
-        **verified,
+        **(_sidecar.enrich_command(verified) or verified),
         "project_id": project_id,
         "project_local_path": local_path_map.get(project_id),
     }
@@ -1147,10 +1169,9 @@ def get_user_id_for_agent_token(token: str) -> str | None:
         .eq("token_hash", token_hash)
         .is_("revoked_at", "null")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    data = res.data if res else None
+    data = _first_or_none(res)
     if not data:
         return None
     token_id = data["id"]
@@ -1189,10 +1210,9 @@ def complete_device_pairing(*, pairing_code: str, device_name: str | None = None
         .eq("status", "pending")
         .order("created_at", desc=True)
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    device = res.data if res else None
+    device = _first_or_none(res)
     if not device:
         return None
     expires_at = device.get("pairing_expires_at")
@@ -1218,8 +1238,8 @@ def complete_device_pairing(*, pairing_code: str, device_name: str | None = None
 def get_device_by_token(device_token: str) -> dict | None:
     sb = get_sb()
     token_hash = _hash_device_token(device_token)
-    res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).maybe_single().execute()
-    return res.data if res else None
+    res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).execute()
+    return _first_or_none(res)
 
 
 def touch_device_heartbeat(device_id: str) -> None:
@@ -1250,10 +1270,9 @@ def link_device_project(*, device_id: str, project_id: str, local_path: str | No
         .eq("device_id", device_id)
         .eq("project_id", project_id)
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    existing = res.data if res else None
+    existing = _first_or_none(res)
     if existing:
         if local_path and existing.get("local_path") != local_path:
             sb.table("device_project_links").update({"local_path": local_path}).eq("id", existing["id"]).execute()
@@ -1281,10 +1300,9 @@ def _link_device_project_local_path_if_missing(*, device_id: str, project_id: st
         .eq("device_id", device_id)
         .eq("project_id", project_id)
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    existing = res.data if res else None
+    existing = _first_or_none(res)
 
     if existing:
         if not existing.get("local_path"):
@@ -1361,7 +1379,6 @@ def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None
         .eq("project_id", project_id)
         .order("created_at", desc=True)
         .limit(1)
-        .maybe_single()
         .execute()
     )
     return res.data if res else None

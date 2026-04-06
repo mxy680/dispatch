@@ -33,6 +33,8 @@ type TimelineCommand = {
   status: string;
   exit_code?: number | null;
   created_at: string;
+  risk_level?: string | null;
+  risk_reason?: string | null;
 };
 
 type CommandMode = "shell" | "agent";
@@ -49,8 +51,17 @@ function statusDot(status: string) {
   if (status === "completed") return "bg-emerald-400";
   if (status === "running") return "bg-blue-400 animate-pulse";
   if (status === "queued") return "bg-amber-400";
+  if (status === "pending_approval") return "bg-violet-400";
   if (status === "failed" || status === "cancelled") return "bg-red-400";
   return "bg-gray-400";
+}
+
+function riskShieldClasses(level: string | null | undefined) {
+  const u = (level ?? "PENDING").toUpperCase();
+  if (u === "SAFE") return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+  if (u === "WARNING") return "border-amber-500/50 bg-amber-500/10 text-amber-100";
+  if (u === "HIGH_RISK") return "border-red-500/60 bg-red-500/15 text-red-100";
+  return "border-border bg-muted/30 text-muted-foreground";
 }
 
 function timeAgo(iso: string) {
@@ -83,6 +94,7 @@ export function UnifiedCommandCenter({
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [listening, setListening] = useState(false);
   const vadRef = useRef<VadLoop | null>(null);
+  const announcedPendingIdRef = useRef<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
@@ -202,9 +214,16 @@ export function UnifiedCommandCenter({
         command_id: activePendingApproval?.id ?? undefined,
       }),
     });
+    let detail: string | undefined;
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === "string" ? body.detail : undefined;
+    } catch {
+      /* ignore */
+    }
     if (!res.ok) {
       playEarcon("error");
-      throw new Error("Failed to send reply");
+      throw new Error(detail ?? "Failed to send reply");
     }
     await refreshTimeline();
     await refreshConversation();
@@ -220,6 +239,7 @@ export function UnifiedCommandCenter({
     if (!res.ok) throw new Error("Failed to update approval");
     await refreshTimeline();
     await refreshConversation();
+    if (action === "approve") playEarcon("success");
   }, [backendUrl, refreshConversation, refreshTimeline]);
 
   const submitEdit = useCallback(async (commandId: string) => {
@@ -242,12 +262,18 @@ export function UnifiedCommandCenter({
       onTranscript: async (text) => {
         try {
           if (activePendingApproval) {
+            const risk = (activePendingApproval.risk_level ?? "PENDING").toUpperCase();
+            if (risk === "HIGH_RISK") {
+              playEarcon("approval");
+              speak("This command is high risk. Use Approve or Reject in the app.");
+              return;
+            }
             await sendContextualReply(text);
           } else {
             setInput(text);
           }
-        } catch {
-          setError("Voice action failed");
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Voice action failed");
         }
       },
       onListeningChange: (next) => {
@@ -262,9 +288,16 @@ export function UnifiedCommandCenter({
   }, [activePendingApproval, mounted, sendContextualReply]);
 
   useEffect(() => {
-    if (!activePendingApproval) return;
-    speak("Approval needed for the pending command.");
-  }, [activePendingApproval]);
+    const pendingId = activePendingApproval?.id ?? null;
+    if (!pendingId) {
+      announcedPendingIdRef.current = null;
+      return;
+    }
+    if (announcedPendingIdRef.current === pendingId) return;
+    announcedPendingIdRef.current = pendingId;
+    speak("Approval needed for the pending command. Say yes or approve to run it.");
+    setMessage("Waiting for approval. Say yes/approve, reject/no, or edit the command.");
+  }, [activePendingApproval?.id]);
 
   const noProjects = projects.length === 0;
 
@@ -422,10 +455,15 @@ export function UnifiedCommandCenter({
                         {c.user_prompt || c.command}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 mt-1 ml-3.5">
+                    <div className="flex items-center gap-2 mt-1 ml-3.5 flex-wrap">
                       <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
                         {(c.provider || "shell")}
                       </Badge>
+                      {c.risk_level && c.risk_level !== "PENDING" && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 uppercase">
+                          {c.risk_level.replace("_", " ")}
+                        </Badge>
+                      )}
                       <span className="text-[10px] text-muted-foreground">{timeAgo(c.created_at)}</span>
                       {c.exit_code !== undefined && c.exit_code !== null && (
                         <span className={`text-[10px] ${c.exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
@@ -459,6 +497,34 @@ export function UnifiedCommandCenter({
               </div>
               {activePendingApproval && (
                 <div className="border-t border-border p-3 space-y-2">
+                  <div className="rounded-md border border-violet-500/35 bg-violet-500/10 px-3 py-2 text-[11px] text-violet-100">
+                    Waiting for your decision. Say <span className="font-semibold">yes</span> /{" "}
+                    <span className="font-semibold">approve</span> to run,{" "}
+                    <span className="font-semibold">no</span> /{" "}
+                    <span className="font-semibold">reject</span> to cancel, or speak an edit starting with{" "}
+                    <span className="font-semibold">edit</span> /{" "}
+                    <span className="font-semibold">change</span>.
+                  </div>
+                  <div
+                    className={`rounded-md border px-3 py-2 text-xs font-mono ${riskShieldClasses(activePendingApproval.risk_level)}`}
+                  >
+                    <div className="font-semibold uppercase tracking-wide mb-1 flex items-center gap-2">
+                      {(activePendingApproval.risk_level ?? "PENDING").replace("_", " ")}
+                      {(activePendingApproval.risk_level ?? "").toUpperCase() === "SAFE" && (
+                        <span aria-hidden>✓</span>
+                      )}
+                    </div>
+                    <p className="opacity-90 leading-snug">
+                      {(activePendingApproval.risk_level ?? "PENDING").toUpperCase() === "PENDING"
+                        ? "AI security scan in progress…"
+                        : (activePendingApproval.risk_reason || "No details yet.")}
+                    </p>
+                    {(activePendingApproval.risk_level ?? "").toUpperCase() === "HIGH_RISK" && (
+                      <p className="mt-2 text-[10px] opacity-80">
+                        Voice approval is disabled for high-risk commands. Use the buttons below.
+                      </p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <Button size="sm" className="text-xs" onClick={() => setApproval(activePendingApproval.id, "approve")}>
                       Approve

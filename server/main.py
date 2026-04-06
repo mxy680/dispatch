@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import uuid
+import re
 from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi import Response, Request
@@ -412,6 +413,33 @@ def _require_device_owner(user_id: str, device_id: str) -> dict:
     return dev
 
 
+def _is_affirmation_intent(t: str) -> bool:
+    """Recognize spoken/typed approvals for the voice approval gate."""
+    if not t:
+        return False
+    t = re.sub(r"[^\w\s]", " ", t).strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    if not t:
+        return False
+    exact = frozenset({
+        "yes", "y", "yep", "yeah", "yup", "ok", "okay", "sure",
+        "approve", "approved", "execute", "run it", "do it", "go ahead",
+        "looks good", "sounds good", "confirmed", "ship it",
+        "that's fine", "that is fine",
+    })
+    if t in exact:
+        return True
+    if len(t) <= 80:
+        for phrase in (
+            "go ahead", "run it", "do it", "approve it", "approve this",
+            "execute it", "execute", "looks good", "sounds good",
+            "yes please", "ok run", "run that",
+        ):
+            if phrase in t:
+                return True
+    return False
+
+
 def _load_state_context(raw: dict | None) -> dict:
     if not raw:
         return {}
@@ -433,15 +461,69 @@ def _classify_reply(text: str) -> str:
     t = (text or "").strip().lower()
     if not t:
         return "empty"
-    if t.endswith("?") or t.startswith("what ") or t.startswith("why ") or t.startswith("how "):
-        return "question"
-    if t in {"yes", "y", "approve", "run it", "do it", "go ahead"}:
+    if _is_affirmation_intent(t):
         return "approve"
-    if t in {"no", "n", "reject", "cancel", "don't run", "do not run"}:
+    normalized = re.sub(r"[^\w\s]", " ", t).strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if normalized in {"no", "n", "reject", "cancel", "don t run", "do not run", "stop", "abort"}:
         return "reject"
-    if t.startswith("edit ") or t.startswith("change ") or t.startswith("instead "):
+    if normalized.startswith("edit ") or normalized.startswith("change ") or normalized.startswith("instead "):
         return "edit"
+    if t.endswith("?") or normalized.startswith("what ") or normalized.startswith("why ") or normalized.startswith("how "):
+        return "question"
     return "unknown"
+
+
+async def _background_security_scan(command_id: str, user_prompt: str, normalized_command: str) -> None:
+    """Runs after response; persists risk_level / risk_reason in the local command sidecar."""
+    from services.security_analyzer import analyze_command_security_with_fallback
+
+    try:
+        result = await analyze_command_security_with_fallback(
+            user_prompt=user_prompt,
+            normalized_command=normalized_command,
+        )
+        risk_level = result["risk_level"]
+        risk_reason = result["risk_reason"]
+        models.update_command_risk_assessment(
+            command_id=command_id,
+            risk_level=risk_level,
+            risk_reason=risk_reason,
+        )
+        # Preserve old "safe command runs" behavior: auto-queue only when still awaiting approval.
+        if (risk_level or "").strip().upper() == "SAFE":
+            cmd = models.get_terminal_command(command_id)
+            if cmd and cmd.get("status") == "pending_approval":
+                updated = models.update_terminal_command_for_approval(command_id=command_id, status="queued")
+                session = models.get_terminal_session(cmd["session_id"]) if cmd.get("session_id") else None
+                project_id = session.get("project_id") if session else None
+                models.add_conversation_turn(
+                    user_id=cmd.get("user_id"),
+                    project_id=project_id,
+                    session_id=cmd.get("session_id"),
+                    command_id=command_id,
+                    role="assistant",
+                    turn_type="approval_result",
+                    content="Security scan marked this command safe. Running now.",
+                )
+                models.upsert_conversation_state(
+                    user_id=cmd.get("user_id"),
+                    project_id=project_id,
+                    state="idle",
+                    active_command_id=None,
+                    context_json={},
+                )
+                logger.info("auto-approved safe command command_id=%s status=%s", command_id, (updated or {}).get("status"))
+    except Exception:
+        logger.exception("security scan failed command_id=%s", command_id)
+        try:
+            models.update_command_risk_assessment(
+                command_id=command_id,
+                risk_level="WARNING",
+                risk_reason="Security scan failed; review manually before approving.",
+            )
+        except Exception:
+            pass
 
 
 @app.post("/api/settings/agent-tokens")
@@ -1305,6 +1387,7 @@ async def upsert_cursor_context(
 @app.post("/api/unified/commands")
 async def create_unified_command(
     request: UnifiedCommandRequest,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
 ):
     _require_project_owner(user.id, request.project_id)
@@ -1369,6 +1452,7 @@ async def create_unified_command(
         request.source,
         command_id,
     )
+    background_tasks.add_task(_background_security_scan, command_id, prompt, command)
     return {
         "success": True,
         "session_id": session["id"],
@@ -1439,6 +1523,7 @@ async def approval_action(
 async def edit_pending_command(
     command_id: str,
     request: EditCommandRequest,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
 ):
     cmd = _require_terminal_command_owner(user.id, command_id)
@@ -1456,6 +1541,7 @@ async def edit_pending_command(
         status="pending_approval",
         command=new_command,
         normalized_command=new_command,
+        reset_risk_pending=True,
     )
     session = models.get_terminal_session(cmd["session_id"])
     project_id = session.get("project_id") if session else None
@@ -1475,6 +1561,7 @@ async def edit_pending_command(
         active_command_id=command_id,
         context_json={"provider": provider, "session_id": cmd.get("session_id")},
     )
+    background_tasks.add_task(_background_security_scan, command_id, new_prompt, new_command)
     return {"success": True, "command": updated}
 
 
@@ -1516,6 +1603,12 @@ async def resolve_contextual_reply(
     )
 
     if intent == "approve":
+        risk = (cmd.get("risk_level") or "PENDING").strip().upper()
+        if risk == "HIGH_RISK":
+            raise HTTPException(
+                status_code=403,
+                detail="High-risk command: confirm with the Approve button in the app (voice approval disabled).",
+            )
         updated = models.update_terminal_command_for_approval(command_id=active_command_id, status="queued")
         models.upsert_conversation_state(
             user_id=user.id,
@@ -1555,7 +1648,7 @@ async def resolve_contextual_reply(
         )
         return {"success": True, "intent": intent, "command": updated}
 
-    if intent in ("edit", "unknown"):
+    if intent == "edit":
         from agents.command_builder import build_provider_command
 
         provider = (ctx.get("provider") if isinstance(ctx, dict) else None) or cmd.get("provider") or "shell"

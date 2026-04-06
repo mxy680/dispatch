@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Card } from "@/components/ui/card";
 
@@ -32,7 +32,6 @@ export function CommandLogViewer({
 }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [logs, setLogs] = useState<TerminalLog[]>([]);
-  const logsEndRef = useRef<HTMLDivElement>(null);
 
   const isTerminal = TERMINAL_STATUSES.includes(commandStatus);
   const isDone = isTerminal;
@@ -68,11 +67,6 @@ export function CommandLogViewer({
     }, 1500);
     return () => clearInterval(interval);
   }, [commandId, isTerminal, fetchLogs]);
-
-  // Auto-scroll to bottom on new logs
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
 
   function renderContent() {
     if (commandStatus === "queued" && logs.length === 0) {
@@ -123,7 +117,6 @@ export function CommandLogViewer({
         style={{ height }}
       >
         {renderContent()}
-        <div ref={logsEndRef} />
       </div>
     </Card>
   );
