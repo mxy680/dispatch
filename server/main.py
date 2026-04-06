@@ -509,11 +509,6 @@ async def set_project_base_path(
     return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
 
 
-@app.get("/api/settings/project-base-path")
-async def get_project_base_path(user: dict = Depends(get_current_user)):
-    return {"success": True, "base_path": models.get_project_base_path_for_user(user.id)}
-
-
 @app.put("/api/settings/project-base-path")
 async def set_project_base_path(
     request: UpdateProjectBasePathRequest,
@@ -983,7 +978,32 @@ async def telegram_webhook(
         
         if not chat_id or not text:
             return {"status": "ignored", "reason": "Empty chat_id or text"}
-            
+
+
+        # 1. Authenticate user by chat_id (Manually for me only since this is a demo)
+        TELEGRAM_USER_MAP = {
+            # MY_CHAT_ID filled in for now
+            "8223456138": "682d660b-7cba-4962-9de0-32fb7ac2405b"
+        }
+
+        user_id = models.get_user_id_by_telegram_chat_id(chat_id)
+        if not user_id:
+            user_id = TELEGRAM_USER_MAP.get(str(chat_id))
+        if not user_id:
+            pseudo_user_id = f"tg_{chat_id}"
+            pseudo_email = f"tg_{chat_id}@telegram.local"
+            models.upsert_user(
+                user_id=pseudo_user_id,
+                email=pseudo_email,
+                telegram_chat_id=str(chat_id)
+            )
+            user_id = pseudo_user_id
+            await send_telegram_message(
+                chat_id,
+                "Welcome to Dispatch! I've created a new account for you. Processing your command now..."
+            )
+
+        '''
         # 1. Authenticate user by chat_id
         user_id = models.get_user_id_by_telegram_chat_id(chat_id)
         if not user_id:
@@ -1002,6 +1022,7 @@ async def telegram_webhook(
                 "Welcome to Dispatch! I've created a new account for you. Processing your command now..."
             )
             # return {"status": "success", "action": "user_created"}
+        '''
             
         # 2. Re-use the existing transcribe_text logic for intent parsing
         user_projects = models.get_user_projects(user_id)

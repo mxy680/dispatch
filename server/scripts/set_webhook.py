@@ -15,7 +15,8 @@ async def set_webhook(webhook_url: str):
 
     url = f"https://api.telegram.org/bot{token}/setWebhook"
     payload = {
-        "url": webhook_url
+        "url": webhook_url,
+        "allowed_updates": ["message"],
     }
     if secret_token:
         payload["secret_token"] = secret_token
@@ -27,10 +28,10 @@ async def set_webhook(webhook_url: str):
             response.raise_for_status()
             print(f"Success! Webhook set to: {webhook_url}")
             print(f"Response: {response.json()}")
+        except httpx.HTTPStatusError as e:
+            print(f"Telegram API error {e.response.status_code}: {e.response.text}")
         except Exception as e:
-            print(f"Failed to set webhook: {e}")
-            if hasattr(e, 'response'):
-                print(f"Response: {e.response.text}")
+            print(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     import sys

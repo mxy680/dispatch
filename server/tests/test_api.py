@@ -108,7 +108,7 @@ class TestTelegramWebhookAPI:
 
     def test_webhook_ignored_no_message(self):
         """Payloads without a message key should be silently ignored."""
-        response = client.post("/api/telegram/webhook", json={"update_id": 99})
+        response = client.post("/api/telegram/webhook", json={"update_id": 99}, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
         assert response.status_code == 200
         assert response.json()["status"] == "ignored"
 
@@ -118,7 +118,7 @@ class TestTelegramWebhookAPI:
             "update_id": 1,
             "message": {"chat": {"id": 123}, "text": ""}
         }
-        response = client.post("/api/telegram/webhook", json=payload)
+        response = client.post("/api/telegram/webhook", json=payload, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
         assert response.status_code == 200
         assert response.json()["status"] == "ignored"
 
@@ -134,7 +134,7 @@ class TestTelegramWebhookAPI:
                 "update_id": 2,
                 "message": {"chat": {"id": 777999}, "text": "hello bot"}
             }
-            response = client.post("/api/telegram/webhook", json=payload)
+            response = client.post("/api/telegram/webhook", json=payload, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
 
         assert response.status_code == 200
         assert response.json()["status"] == "success"

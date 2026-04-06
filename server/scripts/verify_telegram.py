@@ -15,8 +15,8 @@ async def verify_connection(chat_id: str):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "✅ *Dispatch Telegram Integration* is working!\n\nThis is a test message from your server.",
-        "parse_mode": "Markdown"
+        "text": "✅ <b>Dispatch Telegram Integration</b> is working!\n\nThis is a test message from your server.",
+        "parse_mode": "HTML"
     }
 
     async with httpx.AsyncClient() as client:
