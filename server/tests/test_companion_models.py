@@ -49,7 +49,7 @@ def test_device_project_link_and_claim_command(test_db):
     claimed = models.claim_next_queued_command_for_device(device_id=device_id)
     assert claimed is not None
     assert claimed["id"] == command_id
-    assert claimed["status"] == "queued"
+    assert claimed["status"] == "running"
 
 
 def test_cursor_context_save_and_load(test_db):

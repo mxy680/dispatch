@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { CommandLogViewer } from "@/components/command-log-viewer";
 import { playEarcon } from "@/lib/voice/earcons";
-import { speak } from "@/lib/voice/tts";
+import { primeSpeechSynthesis, speak } from "@/lib/voice/tts";
 import { createVadLoop, type VadLoop } from "@/lib/voice/vad-loop";
 
 type ProjectOption = { id: string; name: string };
@@ -35,6 +35,7 @@ type TimelineCommand = {
   created_at: string;
   risk_level?: string | null;
   risk_reason?: string | null;
+  plain_summary?: string | null;
 };
 
 type CommandMode = "shell" | "agent";
@@ -62,6 +63,117 @@ function riskShieldClasses(level: string | null | undefined) {
   if (u === "WARNING") return "border-amber-500/50 bg-amber-500/10 text-amber-100";
   if (u === "HIGH_RISK") return "border-red-500/60 bg-red-500/15 text-red-100";
   return "border-border bg-muted/30 text-muted-foreground";
+}
+
+function humanizePromptText(text: string): string {
+  return (text || "")
+    .replace(/\brm\b/gi, "remove")
+    .replace(/\bls\b/gi, "list files")
+    .replace(/\bmv\b/gi, "move")
+    .replace(/\bcp\b/gi, "copy")
+    .replace(/\bmkdir\b/gi, "create a folder")
+    .replace(/\brmdir\b/gi, "remove a folder")
+    .replace(/\bcat\b/gi, "show the contents of")
+    .replace(/\bgrep\b/gi, "search for")
+    .replace(/\brg\b/gi, "search for")
+    .replace(/\bchmod\b/gi, "change permissions for")
+    .replace(/\bchown\b/gi, "change ownership of")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shellCommandToPlainAction(command: string): string | null {
+  const raw = (command || "").trim();
+  if (!raw) return null;
+  const firstSegment = raw.split("&&")[0]?.split("|")[0]?.split(";")[0]?.trim() || raw;
+  const withoutSudo = firstSegment.replace(/^sudo\s+/, "");
+  const parts = withoutSudo.split(/\s+/);
+  const verb = (parts[0] || "").toLowerCase();
+
+  if (!verb) return null;
+  if (verb === "rm") return "remove files or folders";
+  if (verb === "mv") return "move or rename files";
+  if (verb === "cp") return "copy files";
+  if (verb === "ls") return "list files in a folder";
+  if (verb === "cat") return "show the contents of a file";
+  if (verb === "grep" || verb === "rg") return "search for matching text in files";
+  if (verb === "find") return "find files or folders";
+  if (verb === "mkdir") return "create a folder";
+  if (verb === "rmdir") return "remove an empty folder";
+  if (verb === "touch") return "create or update a file timestamp";
+  if (verb === "chmod") return "change file permissions";
+  if (verb === "chown") return "change file ownership";
+  if (verb === "git") {
+    const sub = (parts[1] || "").toLowerCase();
+    if (sub === "status") return "check Git status";
+    if (sub === "add") return "stage files for commit";
+    if (sub === "commit") return "create a Git commit";
+    if (sub === "push") return "push commits to the remote repository";
+    if (sub === "pull") return "pull changes from the remote repository";
+    if (sub === "checkout" || sub === "switch") return "switch branches or restore files";
+    if (sub === "reset") return "reset Git state";
+    return "run a Git operation";
+  }
+  if (verb === "npm") {
+    const sub = (parts[1] || "").toLowerCase();
+    if (sub === "install" || sub === "i") return "install project dependencies";
+    if (sub === "run" && parts[2]) return `run the npm script ${parts[2]}`;
+    if (sub === "test") return "run project tests";
+    return "run an npm command";
+  }
+  if (verb === "python" || verb === "python3") return "run a Python script";
+  if (verb === "node") return "run a Node.js script";
+  if (verb === "bash" || verb === "sh" || verb === "zsh") return "run a shell script";
+  return "run a shell command";
+}
+
+function summarizePendingCommand(command: TimelineCommand | null): string {
+  if (!command) return "I prepared an action and I am waiting for your approval before I run it.";
+  const backendSummary = (command.plain_summary ?? "").trim();
+  if (backendSummary) return backendSummary;
+  const provider = (command.provider ?? "shell").toLowerCase();
+  const prompt = humanizePromptText((command.user_prompt ?? "").trim());
+  const plainShellAction = shellCommandToPlainAction(command.command ?? "");
+  const cleanedPrompt = prompt.replace(/\s+/g, " ").trim();
+
+  if (cleanedPrompt) {
+    if (provider === "shell") {
+      return `I am ready to run a command that will ${cleanedPrompt}. I will only continue after you confirm.`;
+    }
+    if (provider === "cursor") {
+      return `I prepared a request for the coding assistant to ${cleanedPrompt}. If you approve, it will start this task now.`;
+    }
+    if (provider === "claude") {
+      return `I prepared a request for Claude to ${cleanedPrompt}. If you approve, it will begin working on this right away.`;
+    }
+    return `I prepared a request for the assistant to ${cleanedPrompt}. If you approve, I will run it now.`;
+  }
+
+  if (provider === "shell") {
+    const action = plainShellAction || "perform an operation in your terminal";
+    return `I am ready to ${action}. I am waiting for your approval before I continue.`;
+  }
+  if (provider === "cursor") {
+    return "I am ready to send this task to the coding assistant and I am waiting for your approval.";
+  }
+  if (provider === "claude") {
+    return "I am ready to send this task to Claude and I am waiting for your approval.";
+  }
+  return "I prepared this action and I am waiting for your approval before I continue.";
+}
+
+function classifySpokenApprovalIntent(raw: string): "approve" | "reject" | "other" {
+  const t = (raw || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return "other";
+  const approveSet = new Set([
+    "yes", "y", "yep", "yeah", "yup", "ok", "okay", "sure", "approve", "approved", "run it", "go ahead",
+  ]);
+  const rejectSet = new Set([
+    "no", "n", "nope", "reject", "cancel", "stop", "abort", "do not run", "dont run",
+  ]);
+  if (approveSet.has(t) || t.includes("approve") || t.includes("run it") || t.includes("go ahead")) return "approve";
+  if (rejectSet.has(t) || t.includes("reject") || t.includes("cancel") || t.includes("do not run")) return "reject";
+  return "other";
 }
 
 function timeAgo(iso: string) {
@@ -98,6 +210,20 @@ export function UnifiedCommandCenter({
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    if (!mounted) return;
+    const prime = () => {
+      primeSpeechSynthesis();
+      window.removeEventListener("pointerdown", prime);
+      window.removeEventListener("keydown", prime);
+    };
+    window.addEventListener("pointerdown", prime, { once: true });
+    window.addEventListener("keydown", prime, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", prime);
+      window.removeEventListener("keydown", prime);
+    };
+  }, [mounted]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -193,12 +319,10 @@ export function UnifiedCommandCenter({
       await refreshTimeline();
       await refreshConversation();
       if (json.command_id) setActiveCommandId(json.command_id);
-      setTimeout(() => setMessage(null), 3000);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to send command");
     } finally {
       setSubmitting(false);
-      inputRef.current?.focus();
     }
   };
 
@@ -268,6 +392,17 @@ export function UnifiedCommandCenter({
               speak("This command is high risk. Use Approve or Reject in the app.");
               return;
             }
+            const spokenIntent = classifySpokenApprovalIntent(text);
+            if (spokenIntent === "approve") {
+              await setApproval(activePendingApproval.id, "approve");
+              setMessage("Approved by voice. Running now.");
+              return;
+            }
+            if (spokenIntent === "reject") {
+              await setApproval(activePendingApproval.id, "reject");
+              setMessage("Rejected by voice.");
+              return;
+            }
             await sendContextualReply(text);
           } else {
             setInput(text);
@@ -285,7 +420,7 @@ export function UnifiedCommandCenter({
     return () => {
       vadRef.current?.stop();
     };
-  }, [activePendingApproval, mounted, sendContextualReply]);
+  }, [activePendingApproval, mounted, sendContextualReply, setApproval]);
 
   useEffect(() => {
     const pendingId = activePendingApproval?.id ?? null;
@@ -295,9 +430,10 @@ export function UnifiedCommandCenter({
     }
     if (announcedPendingIdRef.current === pendingId) return;
     announcedPendingIdRef.current = pendingId;
-    speak("Approval needed for the pending command. Say yes or approve to run it.");
+    const summary = summarizePendingCommand(activePendingApproval);
+    speak(`${summary} Say yes or approve to run it, or no to cancel.`);
     setMessage("Waiting for approval. Say yes/approve, reject/no, or edit the command.");
-  }, [activePendingApproval?.id]);
+  }, [activePendingApproval]);
 
   const noProjects = projects.length === 0;
 
@@ -389,7 +525,11 @@ export function UnifiedCommandCenter({
               onClick={() => {
                 const next = !voiceEnabled;
                 setVoiceEnabled(next);
-                if (next) vadRef.current?.start();
+                if (next) {
+                  primeSpeechSynthesis();
+                  vadRef.current?.start();
+                  speak("Voice mode is on. I am listening.");
+                }
                 else vadRef.current?.stop();
               }}
             >
@@ -504,6 +644,10 @@ export function UnifiedCommandCenter({
                     <span className="font-semibold">reject</span> to cancel, or speak an edit starting with{" "}
                     <span className="font-semibold">edit</span> /{" "}
                     <span className="font-semibold">change</span>.
+                  </div>
+                  <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-100">
+                    <span className="font-semibold">Summary:</span>{" "}
+                    {summarizePendingCommand(activePendingApproval)}
                   </div>
                   <div
                     className={`rounded-md border px-3 py-2 text-xs font-mono ${riskShieldClasses(activePendingApproval.risk_level)}`}

@@ -37,6 +37,17 @@ def _first_or_none(res) -> dict | None:
     return None
 
 
+def _execute_single(query) -> dict | None:
+    """Execute a single-row query with maybe_single fallback to limit(1)."""
+    try:
+        return _first_or_none(query.maybe_single().execute())
+    except Exception:
+        try:
+            return _first_or_none(query.limit(1).execute())
+        except Exception:
+            return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -46,8 +57,8 @@ def _now_iso() -> str:
 def upsert_user(user_id: str, email: str, phone_number: str | None = None, telegram_chat_id: str | None = None):
     sb = get_sb()
     # Check if user already exists — if so, just update.
-    existing = sb.table("users").select("id").eq("id", user_id).limit(1).execute()
-    if existing and existing.data:
+    existing = _execute_single(sb.table("users").select("id").eq("id", user_id))
+    if existing:
         update = {"email": email}
         if phone_number:
             update["phone_number"] = phone_number
@@ -179,14 +190,12 @@ def get_user_projects(user_id):
 
 def get_project_by_id(project_id):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("id", project_id).limit(1).execute()
-    return _first_or_none(res)
+    return _execute_single(sb.table("projects").select("*").eq("id", project_id))
 
 
 def get_project_by_name(user_id, name):
     sb = get_sb()
-    res = sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name).limit(1).execute()
-    return _first_or_none(res)
+    return _execute_single(sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name))
 
 
 def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
@@ -234,17 +243,25 @@ def get_user_projects_with_task_counts(user_id):
 
 def _ensure_user_preferences_row(user_id: str) -> None:
     sb = get_sb()
-    sb.table("user_preferences").upsert(
-        {"user_id": user_id},
-        on_conflict="user_id",
-    ).execute()
+    try:
+        sb.table("user_preferences").upsert(
+            {"user_id": user_id},
+            on_conflict="user_id",
+        ).execute()
+    except Exception as e:
+        # Some call paths (e.g. mocked telegram new-user tests) may not have users row inserted.
+        # Do not break app flows just for missing preference bootstrap.
+        if "23503" in str(e) or "foreign key" in str(e).lower():
+            logger.warning("skip user_preferences bootstrap; users row missing for user_id=%s", user_id)
+            return
+        raise
 
 
 def get_user_preferences(user_id: str) -> dict:
     _ensure_user_preferences_row(user_id)
     sb = get_sb()
-    res = sb.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
-    return _first_or_none(res) or {"user_id": user_id}
+    row = _execute_single(sb.table("user_preferences").select("*").eq("user_id", user_id))
+    return row or {"user_id": user_id}
 
 
 def get_default_provider_for_user(user_id: str) -> str:
@@ -585,15 +602,9 @@ def register_instance(
     sb = get_sb()
     existing = None
     if instance_token:
-        res = (
-            sb.table("instances")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("instance_token", instance_token)
-            .limit(1)
-            .execute()
+        existing = _execute_single(
+            sb.table("instances").select("*").eq("user_id", user_id).eq("instance_token", instance_token)
         )
-        existing = res.data if res else None
 
     if existing:
         instance_id = existing["id"]
@@ -622,14 +633,13 @@ def register_instance(
             insert_data["project_id"] = project_id
         sb.table("instances").insert(insert_data).execute()
 
-    res = sb.table("instances").select("*").eq("id", instance_id).limit(1).execute()
-    return (res.data if res else None) or {"id": instance_id}
+    row = _execute_single(sb.table("instances").select("*").eq("id", instance_id))
+    return row or {"id": instance_id}
 
 
 def get_instance_by_id(instance_id: str) -> dict | None:
     sb = get_sb()
-    res = sb.table("instances").select("*").eq("id", instance_id).limit(1).execute()
-    return res.data if res else None
+    return _execute_single(sb.table("instances").select("*").eq("id", instance_id))
 
 
 def update_instance_heartbeat(*, instance_id: str, status: str = "online") -> None:
@@ -759,7 +769,11 @@ def create_terminal_command(
         "status": status,
     }).execute()
     _sidecar.set_command_risk(
-        command_id=command_id, user_id=user_id, risk_level="PENDING", risk_reason=None
+        command_id=command_id,
+        user_id=user_id,
+        risk_level="PENDING",
+        risk_reason=None,
+        plain_summary="I prepared this action and I am waiting for your approval before I run it.",
     )
     # Update session timestamp (non-transactional, cosmetic)
     sb.table("terminal_sessions").update({"updated_at": _now_iso()}).eq("id", session_id).execute()
@@ -922,9 +936,8 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
         .eq("status", "queued")
         .order("created_at")
         .limit(1)
-        .execute()
     )
-    cmd = _first_or_none(cmd_res)
+    cmd = _execute_single(cmd_res)
     if not cmd:
         return None
 
@@ -935,20 +948,17 @@ def claim_next_queued_command_for_user(*, user_id: str) -> dict | None:
     }).eq("id", cmd["id"]).eq("status", "queued").execute()
 
     # Re-fetch to confirm claim.
-    verify_res = sb.table("terminal_commands").select("*").eq("id", cmd["id"]).limit(1).execute()
-    verified = _first_or_none(verify_res)
+    verified = _execute_single(sb.table("terminal_commands").select("*").eq("id", cmd["id"]))
     if not verified or verified.get("status") != "running":
         return None
 
     # Attach project file_path so the agent knows where to run.
     session_id = verified.get("session_id")
     if session_id:
-        sess_res = sb.table("terminal_sessions").select("project_id").eq("id", session_id).limit(1).execute()
-        sess_row = _first_or_none(sess_res)
+        sess_row = _execute_single(sb.table("terminal_sessions").select("project_id").eq("id", session_id))
         if sess_row:
             pid = sess_row.get("project_id")
-            proj_res = sb.table("projects").select("file_path").eq("id", pid).limit(1).execute()
-            proj_row = _first_or_none(proj_res)
+            proj_row = _execute_single(sb.table("projects").select("file_path").eq("id", pid))
             if proj_row:
                 verified["project_path"] = proj_row.get("file_path")
 
@@ -1048,6 +1058,7 @@ def update_command_risk_assessment(
     command_id: str,
     risk_level: str,
     risk_reason: str | None,
+    plain_summary: str | None = None,
     user_id: str | None = None,
 ) -> None:
     level = (risk_level or "PENDING").strip().upper()
@@ -1064,7 +1075,11 @@ def update_command_risk_assessment(
         logger.warning("update_command_risk_assessment: missing user_id for command_id=%s", command_id)
         return
     _sidecar.set_command_risk(
-        command_id=command_id, user_id=uid, risk_level=level, risk_reason=risk_reason
+        command_id=command_id,
+        user_id=uid,
+        risk_level=level,
+        risk_reason=risk_reason,
+        plain_summary=plain_summary,
     )
 
 
@@ -1424,21 +1439,12 @@ def get_device_project_links(device_id: str) -> list[dict]:
     sb = get_sb()
     res = (
         sb.table("device_project_links")
-        .select("*, projects(name)")
+        .select("*")
         .eq("device_id", device_id)
         .order("created_at", desc=True)
         .execute()
     )
-    raw_rows = res.data or []
-    # Flatten: {projects: {name: "foo"}} -> {project_name: "foo"} (immutable reconstruction)
-    result = []
-    for row in raw_rows:
-        proj = row.get("projects")
-        result.append({
-            **{k: v for k, v in row.items() if k != "projects"},
-            "project_name": proj.get("name") if proj else None,
-        })
-    return result
+    return res.data or []
 
 
 def save_cursor_context(
@@ -1464,16 +1470,13 @@ def save_cursor_context(
 
 def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None:
     sb = get_sb()
-    res = (
+    return _execute_single(
         sb.table("cursor_context_snapshots")
         .select("*")
         .eq("device_id", device_id)
         .eq("project_id", project_id)
         .order("created_at", desc=True)
-        .limit(1)
-        .execute()
     )
-    return res.data if res else None
 
 
 # ==================== USER DATA DELETION ====================

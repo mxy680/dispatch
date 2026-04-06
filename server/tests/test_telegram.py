@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 import os
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -42,13 +43,12 @@ def mock_telegram_env_with_secret():
 
 # ── send_telegram_message ──────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_send_telegram_message(mock_telegram_env):
+def test_send_telegram_message(mock_telegram_env):
     """send_telegram_message makes the correct HTTPX call."""
     from services.telegram import send_telegram_message
     with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value.raise_for_status = AsyncMock()
-        result = await send_telegram_message(123456789, "Hello World")
+        mock_post.return_value.raise_for_status = MagicMock()
+        result = asyncio.run(send_telegram_message(123456789, "Hello World"))
 
     assert result is True
     mock_post.assert_called_once()

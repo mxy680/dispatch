@@ -20,7 +20,7 @@ SYSTEM = """You are a security analyzer for a local terminal / coding agent.
 Analyze the proposed command and classify operational risk to the user's machine and data.
 
 Respond with STRICT JSON only (no markdown):
-{"risk_level":"SAFE"|"WARNING"|"HIGH_RISK","risk_reason":"<one short sentence>"}
+{"risk_level":"SAFE"|"WARNING"|"HIGH_RISK","risk_reason":"<one short sentence>","plain_summary":"<2 short non-technical sentences>"}
 
 Rules:
 - HIGH_RISK: destructive filesystem (e.g. rm -rf), privilege escalation, credential exfil, piping secrets, curl|bash from unknown URLs, chmod 777 on sensitive paths, disk wipe patterns.
@@ -67,7 +67,7 @@ async def analyze_command_security(
     normalized_command: str | None,
 ) -> dict[str, str]:
     """
-    Returns {"risk_level": "SAFE"|"WARNING"|"HIGH_RISK", "risk_reason": str}.
+    Returns {"risk_level": "SAFE"|"WARNING"|"HIGH_RISK", "risk_reason": str, "plain_summary": str}.
     """
     cmd = (normalized_command or "").strip() or "(empty)"
     prompt_ctx = (user_prompt or "").strip()[:4000]
@@ -90,11 +90,16 @@ async def analyze_command_security(
     data = _parse_json_object(content_text)
     level = _normalize_level(str(data.get("risk_level", "WARNING")))
     reason = str(data.get("risk_reason", "") or "").strip()
+    plain_summary = str(data.get("plain_summary", "") or "").strip()
     if not reason:
         reason = "Automated risk assessment completed."
+    if not plain_summary:
+        plain_summary = "I prepared a command and I am waiting for your approval before running it."
     if len(reason) > 500:
         reason = reason[:497] + "..."
-    return {"risk_level": level, "risk_reason": reason}
+    if len(plain_summary) > 500:
+        plain_summary = plain_summary[:497] + "..."
+    return {"risk_level": level, "risk_reason": reason, "plain_summary": plain_summary}
 
 
 async def analyze_command_security_heuristic_fallback(
@@ -120,6 +125,7 @@ async def analyze_command_security_heuristic_fallback(
             return {
                 "risk_level": "HIGH_RISK",
                 "risk_reason": "Pattern matches a potentially destructive or high-risk shell operation.",
+                "plain_summary": "This action looks risky because it may delete or heavily modify important files. Please review it carefully before approving.",
             }
     warn_patterns = [
         r"\bcurl\b",
@@ -134,8 +140,13 @@ async def analyze_command_security_heuristic_fallback(
             return {
                 "risk_level": "WARNING",
                 "risk_reason": "Command may perform network or repo changes; review before running.",
+                "plain_summary": "This action will make changes or contact external services. Please confirm that this is what you want.",
             }
-    return {"risk_level": "SAFE", "risk_reason": "No obvious high-risk patterns detected (heuristic scan only)."}
+    return {
+        "risk_level": "SAFE",
+        "risk_reason": "No obvious high-risk patterns detected (heuristic scan only).",
+        "plain_summary": "This action appears safe and mostly routine. It should continue your request without risky system changes.",
+    }
 
 
 async def analyze_command_security_with_fallback(

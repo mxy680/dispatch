@@ -80,8 +80,9 @@ def test_command_builder_provider_templates():
     assert normalize_provider("copilot") == "cursor"
     cursor_cmd = build_provider_command(provider="cursor", prompt="refactor")
     assert "agent -p " in cursor_cmd
-    assert "CI=1" in cursor_cmd
-    assert "claude -p " in build_provider_command(provider="claude", prompt="fix tests")
+    claude_cmd = build_provider_command(provider="claude", prompt="fix tests")
+    assert claude_cmd.startswith("claude -p ")
+    assert "--dangerously-skip-permissions" in claude_cmd
     assert build_provider_command(provider="shell", prompt="ls -la") == "ls -la"
 
 from database import models

@@ -65,6 +65,7 @@ def _init(c: sqlite3.Connection) -> None:
             user_id TEXT NOT NULL,
             risk_level TEXT NOT NULL,
             risk_reason TEXT,
+            plain_summary TEXT,
             updated_at TEXT NOT NULL
         );
         """
@@ -74,6 +75,12 @@ def _init(c: sqlite3.Connection) -> None:
 
 def _ensure(c: sqlite3.Connection) -> None:
     _init(c)
+    cols = {
+        r["name"] for r in c.execute("PRAGMA table_info(command_risk)").fetchall()
+    }
+    if "plain_summary" not in cols:
+        c.execute("ALTER TABLE command_risk ADD COLUMN plain_summary TEXT")
+        c.commit()
 
 
 def _project_key(project_id: str | None) -> str:
@@ -194,7 +201,14 @@ def upsert_conversation_state(
     }
 
 
-def set_command_risk(*, command_id: str, user_id: str, risk_level: str, risk_reason: str | None) -> None:
+def set_command_risk(
+    *,
+    command_id: str,
+    user_id: str,
+    risk_level: str,
+    risk_reason: str | None,
+    plain_summary: str | None = None,
+) -> None:
     level = (risk_level or "PENDING").strip().upper()
     if level not in {"PENDING", "SAFE", "WARNING", "HIGH_RISK"}:
         level = "WARNING"
@@ -202,20 +216,27 @@ def set_command_risk(*, command_id: str, user_id: str, risk_level: str, risk_rea
     with _conn() as c:
         _ensure(c)
         c.execute(
-            """INSERT INTO command_risk (command_id, user_id, risk_level, risk_reason, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO command_risk (command_id, user_id, risk_level, risk_reason, plain_summary, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(command_id) DO UPDATE SET
               risk_level = excluded.risk_level,
               risk_reason = excluded.risk_reason,
+              plain_summary = excluded.plain_summary,
               updated_at = excluded.updated_at,
               user_id = excluded.user_id""",
-            (command_id, user_id, level, risk_reason, now),
+            (command_id, user_id, level, risk_reason, plain_summary, now),
         )
         c.commit()
 
 
 def reset_command_risk_pending(*, command_id: str, user_id: str) -> None:
-    set_command_risk(command_id=command_id, user_id=user_id, risk_level="PENDING", risk_reason=None)
+    set_command_risk(
+        command_id=command_id,
+        user_id=user_id,
+        risk_level="PENDING",
+        risk_reason=None,
+        plain_summary="I prepared this action and I am waiting for your approval before I run it.",
+    )
 
 
 def get_command_risk(command_id: str) -> dict | None:
@@ -238,8 +259,9 @@ def enrich_command(cmd: dict | None) -> dict | None:
             **cmd,
             "risk_level": r["risk_level"],
             "risk_reason": r.get("risk_reason"),
+            "plain_summary": r.get("plain_summary"),
         }
-    return {**cmd, "risk_level": "PENDING", "risk_reason": None}
+    return {**cmd, "risk_level": "PENDING", "risk_reason": None, "plain_summary": None}
 
 
 def enrich_commands(commands: list[dict]) -> list[dict]:

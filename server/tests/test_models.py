@@ -186,7 +186,11 @@ class TestApprovalConversationModels:
         assert payload["status"] == "pending_approval"
         assert "risk_level" not in payload
         risk_mock.assert_called_once_with(
-            command_id=cid, user_id="u1", risk_level="PENDING", risk_reason=None
+            command_id=cid,
+            user_id="u1",
+            risk_level="PENDING",
+            risk_reason=None,
+            plain_summary="I prepared this action and I am waiting for your approval before I run it.",
         )
 
     def test_add_conversation_turn_writes_expected_fields(self):

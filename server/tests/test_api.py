@@ -142,6 +142,7 @@ class TestTelegramWebhookAPI:
         assert response.json()["status"] == "success"
         assert response.json()["action"] == "user_created"
         mock_upsert.assert_called_once()
-        mock_send.assert_called_once()
+        assert mock_send.call_count >= 1
         # Welcome message should be sent back to the right chat
-        assert mock_send.call_args[0][0] == 777999
+        first_call = mock_send.call_args_list[0]
+        assert first_call.args[0] == 777999

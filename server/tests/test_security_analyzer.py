@@ -13,6 +13,8 @@ def test_heuristic_flags_rm_rf_as_high_risk():
         )
     )
     assert r["risk_level"] == "HIGH_RISK"
+    assert "plain_summary" in r
+    assert r["plain_summary"]
 
 
 def test_heuristic_ls_is_safe():
@@ -23,3 +25,5 @@ def test_heuristic_ls_is_safe():
         )
     )
     assert r["risk_level"] == "SAFE"
+    assert "plain_summary" in r
+    assert r["plain_summary"]

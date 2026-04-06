@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { authFetch } from "@/lib/supabase/access-token";
 import { Card } from "@/components/ui/card";
 
@@ -173,7 +173,6 @@ export function CommandLogViewer({
 }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const [logs, setLogs] = useState<TerminalLog[]>([]);
-
   const isTerminal = TERMINAL_STATUSES.includes(commandStatus);
   const isDone = isTerminal;
 
@@ -206,10 +205,6 @@ export function CommandLogViewer({
     }, 1500);
     return () => clearInterval(interval);
   }, [commandId, isTerminal, fetchLogs]);
-
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
 
   function renderContent(): ReactNode {
     if (commandStatus === "queued" && logs.length === 0) {

@@ -483,10 +483,12 @@ async def _background_security_scan(command_id: str, user_prompt: str, normalize
         )
         risk_level = result["risk_level"]
         risk_reason = result["risk_reason"]
+        plain_summary = result.get("plain_summary")
         models.update_command_risk_assessment(
             command_id=command_id,
             risk_level=risk_level,
             risk_reason=risk_reason,
+            plain_summary=plain_summary,
         )
         # Preserve old "safe command runs" behavior: auto-queue only when still awaiting approval.
         if (risk_level or "").strip().upper() == "SAFE":
@@ -1066,6 +1068,7 @@ async def telegram_webhook(
             "8223456138": "682d660b-7cba-4962-9de0-32fb7ac2405b"
         }
 
+        created_user = False
         user_id = models.get_user_id_by_telegram_chat_id(chat_id)
         if not user_id:
             user_id = TELEGRAM_USER_MAP.get(str(chat_id))
@@ -1078,6 +1081,7 @@ async def telegram_webhook(
                 telegram_chat_id=str(chat_id)
             )
             user_id = pseudo_user_id
+            created_user = True
             await send_telegram_message(
                 chat_id,
                 "Welcome to Dispatch! I've created a new account for you. Processing your command now..."
@@ -1153,12 +1157,16 @@ async def telegram_webhook(
         logged_task_id = None
         if intent_type != "create_project":
             fresh_projects = models.get_user_projects(user_id)
-            logged_task_id = models.log_agent_event_task(
-                user_id=user_id, project_name=project_name, projects=fresh_projects,
-                description=task_description or f"[{intent_type}] {text}",
-                raw_transcript=text, intent_type=intent_type,
-                intent_confidence=None, output_summary=action_result, voice_command=text,
-            )
+            try:
+                logged_task_id = models.log_agent_event_task(
+                    user_id=user_id, project_name=project_name, projects=fresh_projects,
+                    description=task_description or f"[{intent_type}] {text}",
+                    raw_transcript=text, intent_type=intent_type,
+                    intent_confidence=None, output_summary=action_result, voice_command=text,
+                )
+            except Exception:
+                logger.exception("telegram_webhook: failed to log agent event task user_id=%s", user_id)
+                logged_task_id = None
 
         # Dispatch Task
         dispatch_task_id = created.get("task_id") or logged_task_id
@@ -1170,7 +1178,10 @@ async def telegram_webhook(
         if action_result:
             await send_telegram_message(chat_id, action_result)
 
-        return {"status": "success", "processed": True}
+        payload = {"status": "success", "processed": True}
+        if created_user:
+            payload["action"] = "user_created"
+        return payload
         
     except Exception as e:
         import traceback

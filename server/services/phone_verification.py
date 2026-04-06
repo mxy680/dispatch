@@ -11,6 +11,10 @@ logger = logging.getLogger("dispatch.phone_verification")
 _client: Client | None = None
 
 
+class VerificationServiceError(RuntimeError):
+    """Raised when verification checks cannot be completed."""
+
+
 def _get_client() -> tuple[Client, str]:
     global _client
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
@@ -64,4 +68,4 @@ def check_verification(phone_number: str, code: str) -> bool:
         return approved
     except Exception as e:
         logger.error("check_verification failed for phone=%r: %r", phone_number, e)
-        return False
+        raise VerificationServiceError("Verification service unavailable") from e
