@@ -324,7 +324,7 @@ export function UnifiedCommandCenter({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 min-w-0 overflow-hidden">
       {/* Command Input */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
@@ -430,7 +430,7 @@ export function UnifiedCommandCenter({
 
       {/* Timeline + Output */}
       {commands.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-2">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-2 min-w-0">
           {/* Timeline */}
           <Card className="overflow-hidden">
             <div className="px-3 py-2 border-b border-border">
@@ -477,7 +477,7 @@ export function UnifiedCommandCenter({
             </div>
           </Card>
 
-          <div className="space-y-2">
+          <div className="space-y-2 min-w-0">
             <Card className="overflow-hidden">
               <div className="px-3 py-2 border-b border-border">
                 <span className="text-xs font-medium text-muted-foreground">Conversation</span>

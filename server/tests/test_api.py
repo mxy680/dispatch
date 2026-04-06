@@ -19,6 +19,8 @@ from fastapi.testclient import TestClient
 
 # Enable dev-mode mock user BEFORE importing main so get_current_user sees it
 os.environ.setdefault("DEVELOPMENT_MODE", "true")
+# Ensure Telegram webhook tests run in dev mode even when a local .env defines a secret.
+os.environ["TELEGRAM_SECRET_TOKEN"] = ""
 
 from main import app  # noqa: E402
 
@@ -108,7 +110,7 @@ class TestTelegramWebhookAPI:
 
     def test_webhook_ignored_no_message(self):
         """Payloads without a message key should be silently ignored."""
-        response = client.post("/api/telegram/webhook", json={"update_id": 99})
+        response = client.post("/api/telegram/webhook", json={"update_id": 99}, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
         assert response.status_code == 200
         assert response.json()["status"] == "ignored"
 
@@ -118,7 +120,7 @@ class TestTelegramWebhookAPI:
             "update_id": 1,
             "message": {"chat": {"id": 123}, "text": ""}
         }
-        response = client.post("/api/telegram/webhook", json=payload)
+        response = client.post("/api/telegram/webhook", json=payload, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
         assert response.status_code == 200
         assert response.json()["status"] == "ignored"
 
@@ -134,7 +136,7 @@ class TestTelegramWebhookAPI:
                 "update_id": 2,
                 "message": {"chat": {"id": 777999}, "text": "hello bot"}
             }
-            response = client.post("/api/telegram/webhook", json=payload)
+            response = client.post("/api/telegram/webhook", json=payload, headers={"X-Telegram-Bot-Api-Secret-Token": ""})
 
         assert response.status_code == 200
         assert response.json()["status"] == "success"

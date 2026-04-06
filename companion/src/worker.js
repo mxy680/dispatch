@@ -198,7 +198,9 @@ export function startWorker() {
         continue;
       }
 
-      if (cmd.status && cmd.status !== "queued") {
+      console.log(`[worker] claimed command id=${cmd.id} status=${cmd.status} provider=${cmd.provider} project_local_path=${cmd.project_local_path}`);
+
+      if (cmd.status && cmd.status !== "queued" && cmd.status !== "running") {
         console.warn(
           `[worker] safety: received non-executable command id=${cmd.id} status=${cmd.status}; skipping`
         );
@@ -311,7 +313,7 @@ export function startWorker() {
           cwd
         )} -p ${shellQuote(promptText)} --print --output-format text`;
       } else if (provider === "claude") {
-        commandText = `claude -p ${shellQuote(promptText)}`;
+        commandText = `claude --dangerously-skip-permissions -p ${shellQuote(promptText)} --verbose --output-format stream-json`;
       } else if (provider === "shell") {
         commandText = String(cmd.command ?? "");
 
@@ -353,27 +355,28 @@ export function startWorker() {
 
       console.log(`[worker] executing command_id=${commandId} cwd=${cwd} cmd=${JSON.stringify(commandText)}`);
 
-      const { exitCode, stdoutChunks, stderrChunks } = await executeCommand(commandText, cwd);
-
       let seq = 0;
-      try {
-        if (stdoutChunks.length > 0) {
-          await appendLogs(commandId, seq, "stdout", stdoutChunks);
-          seq += stdoutChunks.length;
-        }
-        if (stderrChunks.length > 0) {
-          await appendLogs(commandId, seq, "stderr", stderrChunks);
-          seq += stderrChunks.length;
-        }
-      } catch (err) {
-        console.error("[worker] append-logs failed:", err.message);
+      let flushChain = Promise.resolve();
+
+      function enqueueLogs(stream, chunks) {
+        flushChain = flushChain.then(async () => {
+          try {
+            await appendLogs(commandId, seq, stream, chunks);
+          } catch (err) {
+            console.error("[worker] append-logs failed:", err.message);
+          }
+          seq += chunks.length;
+        });
       }
+
+      const { exitCode } = await executeCommand(commandText, cwd, (stream, chunks) => {
+        enqueueLogs(stream, chunks);
+      });
+
+      // Wait for all in-flight log flushes to complete
+      await flushChain;
 
       const status = exitCode === 0 ? "completed" : "failed";
-      if (stderrChunks.length > 0) {
-        const stderrPreview = stderrChunks.join("").slice(0, 300).replace(/\n/g, "\\n");
-        console.log(`[worker] stderr preview command_id=${commandId} ${stderrPreview}`);
-      }
       try {
         if (provider === "cursor" && workspaceToTrust && status === "completed") {
           markWorkspaceTrusted(workspaceToTrust);

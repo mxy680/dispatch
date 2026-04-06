@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 const MAX_CHUNK = 4000;
 
-function chunkText(text, maxBytes = MAX_CHUNK) {
+export function chunkText(text, maxBytes = MAX_CHUNK) {
   if (!text) return [];
   const chunks = [];
   let buf = "";
@@ -17,11 +17,16 @@ function chunkText(text, maxBytes = MAX_CHUNK) {
   return chunks;
 }
 
-export function executeCommand(command, cwd) {
+/**
+ * Execute a command, streaming output via onData callback.
+ *
+ * @param {string} command - Shell command to run
+ * @param {string} cwd - Working directory
+ * @param {(stream: "stdout"|"stderr", chunks: string[]) => void} [onData] - Called with chunks as they arrive
+ * @returns {Promise<{exitCode: number}>}
+ */
+export function executeCommand(command, cwd, onData) {
   return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-
     const proc = spawn(command, {
       cwd,
       shell: true,
@@ -29,23 +34,25 @@ export function executeCommand(command, cwd) {
     });
 
     proc.stdout.on("data", (data) => {
-      stdout += data.toString();
+      if (onData) {
+        const chunks = chunkText(data.toString());
+        if (chunks.length > 0) onData("stdout", chunks);
+      }
     });
 
     proc.stderr.on("data", (data) => {
-      stderr += data.toString();
+      if (onData) {
+        const chunks = chunkText(data.toString());
+        if (chunks.length > 0) onData("stderr", chunks);
+      }
     });
 
     proc.on("error", (err) => {
-      stderr += `spawn error: ${err.message}\n`;
+      if (onData) onData("stderr", [`spawn error: ${err.message}\n`]);
     });
 
     proc.on("close", (code) => {
-      resolve({
-        exitCode: code ?? 1,
-        stdoutChunks: chunkText(stdout),
-        stderrChunks: chunkText(stderr),
-      });
+      resolve({ exitCode: code ?? 1 });
     });
   });
 }

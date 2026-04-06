@@ -126,7 +126,7 @@ class TestCheckVerification:
 
         assert result is False
 
-    def test_twilio_exception_returns_false(self):
+    def test_twilio_exception_raises_service_error(self):
         mock_client = _make_twilio_client()
         mock_client.verify.v2.services.return_value.verification_checks.create.side_effect = (
             RuntimeError("Network error")
@@ -136,9 +136,8 @@ class TestCheckVerification:
             import services.phone_verification as pv
             pv._client = None
             with patch("services.phone_verification.Client", return_value=mock_client):
-                result = pv.check_verification("+12125551234", "123456")
-
-        assert result is False
+                with pytest.raises(pv.VerificationServiceError):
+                    pv.check_verification("+12125551234", "123456")
 
     def test_calls_verification_checks_create_with_correct_args(self):
         mock_client = _make_twilio_client(verification_status="approved")
