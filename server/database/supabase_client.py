@@ -1,6 +1,7 @@
 # server/database/supabase_client.py
 """Supabase client singleton for database operations."""
 import os
+from typing import Optional
 from supabase import create_client, Client
 
 SUPABASE_URL = (
@@ -15,7 +16,7 @@ if not SUPABASE_URL:
 if not SUPABASE_SERVICE_ROLE_KEY:
     print("[DB] WARNING: SUPABASE_SERVICE_ROLE_KEY not set. Database operations will fail.")
 
-_client: Client | None = None
+_client: Optional[Client] = None
 
 
 def get_sb() -> Client:

@@ -1,3 +1,5 @@
+from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
+
 import os
 import logging
 import httpx
