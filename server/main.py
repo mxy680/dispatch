@@ -365,6 +365,7 @@ class VerifyOtpRequest(BaseModel):
 
 
 def _require_project_owner(user_id: str, project_id: str) -> dict:
+    """Fetch a project and assert the caller owns it. Raises 404/403 otherwise."""
     project = models.get_project_by_id(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -373,6 +374,7 @@ def _require_project_owner(user_id: str, project_id: str) -> dict:
     return project
 
 def _require_terminal_session_owner(user_id: str, session_id: str) -> dict:
+    """Fetch a terminal session and assert the caller owns it. Raises 404/403 otherwise."""
     session = models.get_terminal_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Terminal session not found")
@@ -381,6 +383,7 @@ def _require_terminal_session_owner(user_id: str, session_id: str) -> dict:
     return session
 
 def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
+    """Fetch a terminal command and assert the caller owns it. Raises 404/403 otherwise."""
     cmd = models.get_terminal_command(command_id)
     if not cmd:
         raise HTTPException(status_code=404, detail="Terminal command not found")
@@ -390,6 +393,7 @@ def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
 
 
 def _require_task_owner(user_id: str, task_id: str) -> dict:
+    """Fetch a task and assert the caller owns it. Raises 404/403 otherwise."""
     task = models.get_task_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -399,11 +403,13 @@ def _require_task_owner(user_id: str, task_id: str) -> dict:
 
 
 def _require_user_match(path_user_id: str, user_id: str) -> None:
+    """Assert that the path user_id matches the authenticated user. Raises 403 otherwise."""
     if path_user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _require_device_owner(user_id: str, device_id: str) -> dict:
+    """Fetch a device and assert it belongs to the authenticated user. Raises 404 otherwise."""
     devices = models.list_devices_for_user(user_id)
     dev = next((d for d in devices if d.get("id") == device_id), None)
     if not dev:
@@ -439,6 +445,10 @@ def _is_affirmation_intent(t: str) -> bool:
 
 
 def _load_state_context(raw: dict | None) -> dict:
+    """Extract and deserialize the context_json field from a conversation state row.
+
+    Returns an empty dict if the row is missing or context_json is not valid JSON.
+    """
     if not raw:
         return {}
     ctx = raw.get("context_json")
@@ -456,6 +466,11 @@ def _load_state_context(raw: dict | None) -> dict:
 
 
 def _classify_reply(text: str) -> str:
+    """Classify a free-text reply into one of: 'approve', 'reject', 'edit', 'question', 'empty', or 'command'.
+
+    Used by the voice/Telegram approval flow to decide how to handle a user's response
+    to a pending command without requiring exact keyword matches.
+    """
     t = (text or "").strip().lower()
     if not t:
         return "empty"

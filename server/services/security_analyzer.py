@@ -44,6 +44,7 @@ def _get_client() -> AsyncOpenAI:
 
 
 def _parse_json_object(raw: str) -> dict:
+    """Parse a JSON object from a string, stripping markdown code fences if present."""
     text = raw.strip()
     if "```json" in text:
         text = text.split("```json", 1)[1].split("```", 1)[0].strip()
@@ -53,6 +54,11 @@ def _parse_json_object(raw: str) -> dict:
 
 
 def _normalize_level(level: str) -> str:
+    """Normalize a raw risk level string to one of SAFE, WARNING, or HIGH_RISK.
+
+    Handles case variations (e.g. 'safe', 'HIGHRISK') and defaults unknown
+    values to WARNING so callers always receive a valid level.
+    """
     u = (level or "").strip().upper().replace(" ", "_")
     if u == "HIGHRISK":
         u = "HIGH_RISK"
@@ -107,8 +113,14 @@ async def analyze_command_security_heuristic_fallback(
     user_prompt: str | None,
     normalized_command: str | None,
 ) -> dict[str, str]:
-    """
-    Used when GROQ_API_KEY is missing or the LLM call fails.
+    """Classify command risk using regex patterns when the LLM is unavailable.
+
+    Scans both user_prompt and normalized_command for known HIGH_RISK patterns
+    (e.g. rm -rf, curl|bash, dd if=) and WARNING patterns (e.g. npm install,
+    git push). Falls back to SAFE if no patterns match.
+
+    Returns the same dict shape as analyze_command_security:
+    {"risk_level": str, "risk_reason": str, "plain_summary": str}
     """
     text = f"{user_prompt or ''}\n{normalized_command or ''}".lower()
     high_patterns = [
