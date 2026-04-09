@@ -156,7 +156,7 @@ The agent token is generated in the dashboard under Settings → Agents.
 
 ```bash
 cd server
-python -m pytest -q                          # run all 175 tests
+python -m pytest -q                          # run all 229 tests
 python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 ```
 
@@ -190,7 +190,7 @@ This identified 70 surviving mutants in the heuristic security analyzer (gaps in
 
 ### Coverage
 
-Overall: **70%** — see `demo 4/coverage_report.txt` for the full breakdown.
+Overall: **74%** — see `demo 4/coverage_report.txt` for the full breakdown.
 
 Highlight modules:
 - `agents/command_builder.py` — 100%
