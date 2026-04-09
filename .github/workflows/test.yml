@@ -25,7 +25,7 @@ jobs:
           cache-dependency-path: server/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest pytest-asyncio pytest-cov hypothesis
+        run: pip install -r requirements.txt pytest pytest-asyncio pytest-cov hypothesis eval_type_backport
 
       - name: Run tests
         env:

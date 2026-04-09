@@ -8,3 +8,4 @@ httpx                     # Async HTTP client (Twilio audio download)
 twilio                    # Twilio Verify API for SMS OTP
 psycopg[binary]>=3.1.0    # Postgres driver for init_supabase_conversation_tables.py
 hypothesis>=6.0.0         # Property-based testing
+eval_type_backport        # Pydantic V2 + Python 3.9 compatibility for str | None syntax
