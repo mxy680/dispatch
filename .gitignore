@@ -21,3 +21,20 @@ server/__pycache__/main.cpython-310.pyc
 server/__pycache__/main.cpython-310.pyc
 /server/__pycache__
 server/data/*.db
+*.db
+
+# Test output files
+server/test_out*.txt
+server/test_results.txt
+server/demo.py
+
+# Coverage and mutation testing artifacts
+server/.coverage
+server/coverage_html/
+server/mutants/
+server/.hypothesis/
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
