@@ -1,5 +1,7 @@
 # Dispatch
 
+[![Tests](https://github.com/mxy680/dispatch/actions/workflows/test.yml/badge.svg)](https://github.com/mxy680/dispatch/actions/workflows/test.yml)
+
 Voice and typed command orchestration for local coding agents.
 
 ## What is this?
