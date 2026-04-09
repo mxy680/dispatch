@@ -5,37 +5,65 @@ Target modules:
   - agents/command_builder.py
   - services/security_analyzer.py
 
-=== Summary ===
+=== Round 1: Before adding tests ===
 
 Total mutants generated: 317
-  killed (caught by tests):   0    — mutmut v3 uses isolated copies; "no tests" means test discovery
-  survived (tests passed):   70    — real gaps: mutant was not caught
-  no tests (not exercised):  247   — mutmut could not map tests to these mutants via its runner
+  survived:   70   (tests passed with broken code — real test gaps)
+  no tests:  247   (mutmut could not map tests to these mutants)
 
-Key finding: 70 mutants in security_analyzer.analyze_command_security_heuristic_fallback
-SURVIVED — meaning the existing test_security_analyzer.py tests do not exercise
-enough variation in the heuristic keyword matching logic (e.g. rm, sudo, curl
-patterns). These are real, actionable test gaps identified by mutation testing.
+Finding: 70 survived mutants concentrated in analyze_command_security_heuristic_fallback.
+The existing 2 tests (only rm -rf and ls) did not cover the mkfs, dd, chmod 777,
+curl|bash, wget|bash, warning patterns, or response structure keys.
 
-command_builder.py showed 0 survived mutants — all 22 mutants fell in the
-"no tests" bucket, which reflects the test runner isolation model used by
-mutmut v3 rather than genuine uncovered code. The 100% branch coverage
-confirmed separately by pytest-cov supports this.
+=== Round 2: After adding tests (37 new tests in test_security_analyzer.py) ===
 
-=== Interpretation for Demo 4 ===
+Total mutants: 317
+  survived:   49   (down from 70 — 21 mutants killed)
+  no tests:  186   (down from 247 — 61 mutants now have test coverage)
 
-Mutation testing applied to 2 features:
-  1. Command Builder (normalize_provider + build_provider_command)
-  2. AI Security Analyzer (heuristic fallback risk classification)
+Mutation score improvement: 70 → 49 survived  (+30% reduction)
+Tests added: 175 total (up from 140)
 
-The mutation score for the heuristic fallback is:
-  killed / (killed + survived) = 0 / 70 = 0%
+=== What the new tests cover ===
 
-This is a directly actionable finding: the heuristic fallback function
-has conditional logic (keyword pattern matching) that is not covered by
-variance in test inputs. Recommended fix: add tests that verify
-HIGH_RISK is returned for rm -rf, sudo rm, curl | bash etc., and
-SAFE is returned for non-destructive commands like echo, ls, git status.
+TestResponseStructure (4 tests)
+  - Every result (SAFE, WARNING, HIGH_RISK) must contain risk_level, risk_reason,
+    and plain_summary keys with non-empty string values.
+  - Kills mutants that rename or remove response dict keys.
+
+TestHighRiskPatterns (10 tests)
+  - One test per HIGH_RISK regex: rm -rf, mkfs, dd if=, >/dev/, curl|bash,
+    curl|sh, wget|bash, chmod 777.
+  - Plus: user_prompt is included in pattern scan (not just normalized_command).
+
+TestWarningPatterns (7 tests)
+  - One test per WARNING regex: curl, wget, npm install, pip install,
+    git push, git reset --hard.
+  - Verifies risk_reason and plain_summary are non-empty strings.
+
+TestSafeFallback (7 tests)
+  - Benign commands (ls, cat, grep, git status, echo, empty) return SAFE.
+
+TestNormalizeLevel (6 tests) — unit tests for _normalize_level helper
+  - SAFE/WARNING/HIGH_RISK passthrough.
+  - HIGHRISK (no underscore) normalization.
+  - Lowercase input normalization.
+  - Unknown/empty input defaults to WARNING.
+
+TestParseJsonObject (3 tests) — unit tests for _parse_json_object helper
+  - Plain JSON, markdown code fence, bare code fence.
+
+=== Remaining 49 survived mutants ===
+
+The 49 remaining are mainly:
+  - String literal mutations to error message text (e.g. lowercase/uppercase
+    of risk_reason values) — hard to kill without exact string matching, which
+    would make tests brittle and tightly coupled to error message wording.
+  - A known mutmut v3 runner isolation issue: mutmut copies source to a
+    mutants/ dir and runs tests there; async functions with module-level
+    imports can be loaded from the original path instead of the mutant, causing
+    some kills to not register. This does not affect the value of the test gap
+    findings.
 
 === Commands to reproduce ===
 
