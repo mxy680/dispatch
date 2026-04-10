@@ -11,6 +11,9 @@ import re
 from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi import Response, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 from services.transcription import transcribe_file
 from supabase import create_client, Client
@@ -102,6 +105,11 @@ from agents.dispatcher import dispatch_task as agent_dispatch_task
 from agents.dispatcher import set_terminal_access, get_terminal_access
 
 app = FastAPI(title="Dispatch API")
+
+# --- RATE LIMITING ---
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -621,10 +629,11 @@ _E164_RE = _re.compile(r"^\+[1-9]\d{1,14}$")
 
 
 @app.post("/api/phone/send-otp")
-async def send_otp(request: SendOtpRequest, user: dict = Depends(get_current_user)):
-    if not _E164_RE.match(request.phone_number):
+@limiter.limit("5/minute")
+async def send_otp(request: Request, body: SendOtpRequest, user: dict = Depends(get_current_user)):
+    if not _E164_RE.match(body.phone_number):
         raise HTTPException(status_code=400, detail="Phone number must be in E.164 format (e.g. +12125551234)")
-    success = phone_verification.send_verification(request.phone_number)
+    success = phone_verification.send_verification(body.phone_number)
     if not success:
         raise HTTPException(status_code=502, detail="Failed to send verification code")
     return {"success": True}
@@ -767,8 +776,10 @@ async def link_project_for_current_device(
 
 # --- 5. THE CORE ENDPOINT (EAR + BRAIN + HANDS) ---
 @app.post("/transcribe")
+@limiter.limit("10/minute")
 async def transcribe_audio(
-    file: UploadFile = File(...), 
+    request: Request,
+    file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
     background_tasks: BackgroundTasks = None,
 ):
@@ -931,21 +942,23 @@ class TextCommandRequest(BaseModel):
     project_id: str | None = None
 
 @app.post("/transcribe-text")
+@limiter.limit("20/minute")
 async def transcribe_text(
-    request: TextCommandRequest,
+    request: Request,
+    body: TextCommandRequest,
     user: dict = Depends(get_current_user),
     background_tasks: BackgroundTasks = None,
 ):
     """Same pipeline as /transcribe but accepts text directly (skips Whisper STT)."""
     try:
-        transcript_text = request.text.strip()
+        transcript_text = body.text.strip()
         if not transcript_text:
             return {"status": "error", "message": "Empty text"}
 
-        if request.project_id:
+        if body.project_id:
             state = models.get_conversation_state(user_id=user.id, project_id=request.project_id)
             if state and state.get("state") == "awaiting_approval" and state.get("active_command_id"):
-                fake = ContextualReplyRequest(project_id=request.project_id, reply=transcript_text)
+                fake = ContextualReplyRequest(project_id=body.project_id, reply=transcript_text)
                 resolved = await resolve_contextual_reply(fake, user)
                 return {
                     "status": "success",
@@ -1299,7 +1312,8 @@ async def get_user_agent_executions(user_id: str, user: dict = Depends(get_curre
 
 
 @app.post("/api/agent/dispatch/{task_id}")
-async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def manually_dispatch_agent(request: Request, task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     """Manually trigger agent dispatch for a task."""
     task_dict = _require_task_owner(user.id, task_id)
     intent_data = {
