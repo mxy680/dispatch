@@ -12,9 +12,12 @@ directly. Coverage targets:
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from services.security_analyzer import (
+    analyze_command_security,
     analyze_command_security_heuristic_fallback,
+    analyze_command_security_with_fallback,
     _normalize_level,
     _parse_json_object,
 )
@@ -209,4 +212,109 @@ class TestParseJsonObject:
     def test_strips_bare_code_fence(self):
         raw = '```\n{"risk_level": "HIGH_RISK"}\n```'
         result = _parse_json_object(raw)
+        assert result["risk_level"] == "HIGH_RISK"
+
+
+# ---------------------------------------------------------------------------
+# _get_client
+# ---------------------------------------------------------------------------
+
+class TestGetClient:
+    def test_raises_without_api_key(self, monkeypatch):
+        import services.security_analyzer as sa
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        sa._client = None
+        with pytest.raises(RuntimeError, match="GROQ_API_KEY is not set"):
+            sa._get_client()
+        sa._client = None
+
+    def test_returns_client_with_api_key(self, monkeypatch):
+        import services.security_analyzer as sa
+        monkeypatch.setenv("GROQ_API_KEY", "test-key")
+        sa._client = None
+        with patch("services.security_analyzer.AsyncOpenAI") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = sa._get_client()
+        assert client is not None
+        sa._client = None
+
+
+# ---------------------------------------------------------------------------
+# analyze_command_security (LLM path)
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeCommandSecurity:
+    def _make_mock_client(self, response_json: str):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = response_json
+        mock_completions = AsyncMock()
+        mock_completions.create = AsyncMock(return_value=mock_response)
+        mock_client = MagicMock()
+        mock_client.chat.completions = mock_completions
+        return mock_client
+
+    async def test_returns_safe_from_llm(self, monkeypatch):
+        import services.security_analyzer as sa
+        sa._client = self._make_mock_client('{"risk_level":"SAFE","risk_reason":"looks fine","plain_summary":"All good."}')
+        result = await analyze_command_security(user_prompt="ls", normalized_command="ls -la")
+        assert result["risk_level"] == "SAFE"
+        assert result["risk_reason"] == "looks fine"
+        sa._client = None
+
+    async def test_returns_high_risk_from_llm(self, monkeypatch):
+        import services.security_analyzer as sa
+        sa._client = self._make_mock_client('{"risk_level":"HIGH_RISK","risk_reason":"rm -rf detected","plain_summary":"Very dangerous."}')
+        result = await analyze_command_security(user_prompt="delete", normalized_command="rm -rf /")
+        assert result["risk_level"] == "HIGH_RISK"
+        sa._client = None
+
+    async def test_fills_empty_reason_with_default(self, monkeypatch):
+        import services.security_analyzer as sa
+        sa._client = self._make_mock_client('{"risk_level":"WARNING","risk_reason":"","plain_summary":""}')
+        result = await analyze_command_security(user_prompt=None, normalized_command="curl x.com")
+        assert result["risk_reason"]
+        assert result["plain_summary"]
+        sa._client = None
+
+    async def test_truncates_long_reason(self, monkeypatch):
+        import services.security_analyzer as sa
+        long_str = "x" * 600
+        sa._client = self._make_mock_client(f'{{"risk_level":"WARNING","risk_reason":"{long_str}","plain_summary":"ok"}}')
+        result = await analyze_command_security(user_prompt=None, normalized_command="curl x.com")
+        assert len(result["risk_reason"]) <= 500
+        sa._client = None
+
+    async def test_normalizes_level_from_llm(self, monkeypatch):
+        import services.security_analyzer as sa
+        sa._client = self._make_mock_client('{"risk_level":"highrisk","risk_reason":"bad","plain_summary":"bad"}')
+        result = await analyze_command_security(user_prompt=None, normalized_command="rm -rf /")
+        assert result["risk_level"] == "HIGH_RISK"
+        sa._client = None
+
+
+# ---------------------------------------------------------------------------
+# analyze_command_security_with_fallback
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeCommandSecurityWithFallback:
+    async def test_uses_llm_when_available(self, monkeypatch):
+        mock_result = {"risk_level": "SAFE", "risk_reason": "fine", "plain_summary": "ok"}
+        with patch("services.security_analyzer.analyze_command_security", new=AsyncMock(return_value=mock_result)):
+            result = await analyze_command_security_with_fallback(
+                user_prompt="ls", normalized_command="ls -la"
+            )
+        assert result["risk_level"] == "SAFE"
+
+    async def test_falls_back_to_heuristic_on_llm_failure(self, monkeypatch):
+        with patch("services.security_analyzer.analyze_command_security", new=AsyncMock(side_effect=Exception("API down"))):
+            result = await analyze_command_security_with_fallback(
+                user_prompt=None, normalized_command="ls -la"
+            )
+        assert result["risk_level"] == "SAFE"
+
+    async def test_fallback_catches_high_risk(self, monkeypatch):
+        with patch("services.security_analyzer.analyze_command_security", new=AsyncMock(side_effect=RuntimeError("no key"))):
+            result = await analyze_command_security_with_fallback(
+                user_prompt=None, normalized_command="rm -rf /tmp"
+            )
         assert result["risk_level"] == "HIGH_RISK"
