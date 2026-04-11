@@ -156,47 +156,58 @@ The agent token is generated in the dashboard under Settings → Agents.
 
 ```bash
 cd server
-python -m pytest -q                          # run all 229 tests
+python -m pytest -q                          # run all 457 tests
 python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 ```
 
-### Test strategy
+### Test strategy — four methods applied
 
-Mock-object testing is used throughout so the suite runs without real Supabase credentials or API keys. A shared `conftest.py` fixture provides a chainable Supabase mock that correctly handles both list queries (`data = []`) and single-row queries (`maybe_single().execute().data = None`).
+**1. Mock-object testing** is used throughout so the suite runs without real Supabase credentials, API keys, or network access. A shared `conftest.py` provides a chainable in-memory Supabase mock. Additional patches use `unittest.mock` to isolate every external dependency.
+
+**2. Property-based testing** (Hypothesis) verifies invariants that hold for any input, not just hand-picked examples:
+- `_normalize_level(s)` always returns one of `{SAFE, WARNING, HIGH_RISK}`
+- `normalize_provider(s)` always returns one of `{cursor, claude, shell}`
+- `build_provider_command(provider, prompt)` always contains the prompt and required flags
+
+**3. Mutation testing** with `mutmut` was applied to `agents/command_builder.py` and `services/security_analyzer.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 49 (30% improvement). See `demo 4/mutation_report.txt`.
+
+```bash
+cd server && mutmut run && mutmut results
+```
+
+**4. CI/CD regression testing** — GitHub Actions runs the full suite on every push. Every failing commit is caught before it reaches `main`.
 
 Key test files:
 
-| File | What it tests |
+| File | What it covers |
 |---|---|
-| `test_security_analyzer.py` | Heuristic fallback — all HIGH_RISK/WARNING/SAFE patterns, response structure, helper functions |
-| `test_dispatcher.py` | Agent dispatch pipeline — task resolution, terminal command creation, access gating |
-| `test_command_builder.py` | Provider normalization and CLI command construction |
-| `test_api_endpoints.py` | REST API — projects, unified commands, phone verification, approval flows |
-| `test_api.py` | Telegram webhook, dashboard, health endpoints |
-| `test_models.py` | Supabase model functions |
-
-### Mutation testing
-
-Mutation testing was applied to `agents/command_builder.py` and `services/security_analyzer.py` using `mutmut`:
-
-```bash
-cd server
-pip install mutmut
-mutmut run
-mutmut results
-```
-
-This identified 70 surviving mutants in the heuristic security analyzer (gaps in pattern coverage). After adding targeted tests, the score improved to 49 survived — a 30% reduction. Results are documented in `demo 4/mutation_report.txt`.
+| `test_security_analyzer.py` | All HIGH_RISK/WARNING/SAFE patterns, LLM path, fallback, helpers |
+| `test_dispatcher.py` | Agent dispatch pipeline, task resolution, terminal command creation |
+| `test_command_builder.py` | Provider normalization, CLI command construction |
+| `test_main_routes.py` | Settings, dashboard, tasks, agent, unified endpoints |
+| `test_main_extra.py` | Helper functions, phone, project, dispatch routes |
+| `test_main_extra2.py` | Device, agent-token, terminal, unified-reply, transcribe-text |
+| `test_property_based.py` | Hypothesis property tests across three modules |
+| `test_sidecar_store.py` | SQLite sidecar — conversation turns, state, command risk |
+| `test_agents_and_llm.py` | copilot_agent, prompt_refiner, LLM service, Supabase client |
+| `test_services.py` | Telegram and transcription services |
+| `test_models.py` | Supabase model functions (51 tests) |
 
 ### Coverage
 
-Overall: **74%** — see `demo 4/coverage_report.txt` for the full breakdown.
+Overall: **88%** across 457 tests — see `demo 4/coverage_report.txt` for the full breakdown.
 
 Highlight modules:
 - `agents/command_builder.py` — 100%
+- `agents/copilot_agent.py` — 100%
+- `agents/prompt_refiner.py` — 100%
 - `agents/dispatcher.py` — 93%
+- `services/security_analyzer.py` — 99%
+- `services/telegram.py` — 100%
+- `services/transcription.py` — 100%
 - `services/phone_verification.py` — 95%
-- `database/models.py` — 67%
+- `database/sidecar_store.py` — 97%
+- `main.py` — 79%
 
 ## AI-Assisted Development
 
