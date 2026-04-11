@@ -199,13 +199,13 @@ class TestLLM:
 
 class TestSupabaseClient:
     def test_get_sb_raises_when_env_not_set(self, monkeypatch):
-        monkeypatch.delenv("SUPABASE_URL", raising=False)
-        monkeypatch.delenv("NEXT_PUBLIC_SUPABASE_URL", raising=False)
-        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
         import database.supabase_client as sc
+        monkeypatch.setattr(sc, "SUPABASE_URL", "")
+        monkeypatch.setattr(sc, "SUPABASE_SERVICE_ROLE_KEY", "")
         sc._client = None
         with pytest.raises(RuntimeError, match="SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set"):
             sc.get_sb()
+        sc._client = None
 
     def test_get_sb_returns_cached_client(self, monkeypatch):
         import database.supabase_client as sc
