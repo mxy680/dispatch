@@ -81,7 +81,7 @@ def test_command_builder_provider_templates():
     cursor_cmd = build_provider_command(provider="cursor", prompt="refactor")
     assert "agent -p " in cursor_cmd
     claude_cmd = build_provider_command(provider="claude", prompt="fix tests")
-    assert claude_cmd.startswith("claude -p ")
+    assert "claude -p " in claude_cmd  # full path to binary may prefix the command
     assert "--dangerously-skip-permissions" in claude_cmd
     assert build_provider_command(provider="shell", prompt="ls -la") == "ls -la"
 

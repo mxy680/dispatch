@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # server/services/llm.py
 """Intent parsing via Groq LLM API."""
 
@@ -5,11 +7,12 @@ import json
 import logging
 import os
 
+from typing import Optional
 from openai import AsyncOpenAI
 
 logger = logging.getLogger("dispatch.llm")
 
-_client: AsyncOpenAI | None = None
+_client: Optional[AsyncOpenAI] = None
 
 
 def _get_client() -> AsyncOpenAI:

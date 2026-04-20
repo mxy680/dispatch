@@ -4,6 +4,7 @@ Unit tests for database model functions.
 These tests mock `database.models.get_sb` (the bound name inside models.py)
 so no real Supabase connection is needed.
 """
+import pytest
 from unittest.mock import patch, MagicMock
 from database import models
 
@@ -226,3 +227,305 @@ class TestApprovalConversationModels:
         )
         assert row["role"] == "assistant"
         assert row["turn_type"] == "approval_request"
+
+
+# ---------------------------------------------------------------------------
+# Pure helper functions — no mocking needed
+# ---------------------------------------------------------------------------
+
+class TestNormalizeConversationStateRow:
+    def test_none_input_returns_none(self):
+        from database.models import _normalize_conversation_state_row
+        assert _normalize_conversation_state_row(None) is None
+
+    def test_empty_project_id_becomes_none(self):
+        from database.models import _normalize_conversation_state_row
+        row = {"project_id": "", "other": "val"}
+        result = _normalize_conversation_state_row(row)
+        assert result["project_id"] is None
+        assert result["other"] == "val"
+
+    def test_non_empty_project_id_unchanged(self):
+        from database.models import _normalize_conversation_state_row
+        row = {"project_id": "proj-1", "other": "val"}
+        result = _normalize_conversation_state_row(row)
+        assert result["project_id"] == "proj-1"
+
+
+class TestFirstOrNone:
+    def test_none_input_returns_none(self):
+        from database.models import _first_or_none
+        assert _first_or_none(None) is None
+
+    def test_empty_list_returns_none(self):
+        from database.models import _first_or_none
+        res = MagicMock()
+        res.data = []
+        assert _first_or_none(res) is None
+
+    def test_list_with_item_returns_first(self):
+        from database.models import _first_or_none
+        res = MagicMock()
+        res.data = [{"id": "a"}, {"id": "b"}]
+        assert _first_or_none(res)["id"] == "a"
+
+    def test_dict_data_returns_dict(self):
+        from database.models import _first_or_none
+        res = MagicMock()
+        res.data = {"id": "a"}
+        assert _first_or_none(res)["id"] == "a"
+
+    def test_none_data_attribute_returns_none(self):
+        from database.models import _first_or_none
+        res = MagicMock()
+        res.data = None
+        assert _first_or_none(res) is None
+
+
+class TestSafeProjectFolderName:
+    def test_normal_name_unchanged(self):
+        from database.models import _safe_project_folder_name
+        assert _safe_project_folder_name("my-project") == "my-project"
+
+    def test_spaces_replaced_with_dash(self):
+        from database.models import _safe_project_folder_name
+        assert _safe_project_folder_name("My Project") == "My-Project"
+
+    def test_slashes_replaced(self):
+        from database.models import _safe_project_folder_name
+        result = _safe_project_folder_name("a/b\\c")
+        assert "/" not in result
+        assert "\\" not in result
+
+    def test_empty_string_returns_project(self):
+        from database.models import _safe_project_folder_name
+        assert _safe_project_folder_name("") == "Project"
+
+    def test_special_chars_stripped(self):
+        from database.models import _safe_project_folder_name
+        result = _safe_project_folder_name("hello@world!")
+        assert "@" not in result
+        assert "!" not in result
+
+
+class TestComputeDefaultProjectFilePath:
+    def test_none_base_path_returns_none(self):
+        from database.models import compute_default_project_file_path
+        assert compute_default_project_file_path(None, "MyProject") is None
+
+    def test_relative_base_path_returns_none(self):
+        from database.models import compute_default_project_file_path
+        assert compute_default_project_file_path("relative/path", "MyProject") is None
+
+    def test_absolute_base_path_returns_joined_path(self):
+        from database.models import compute_default_project_file_path
+        result = compute_default_project_file_path("/home/user/projects", "My App")
+        assert result == "/home/user/projects/My-App"
+
+    def test_empty_base_path_returns_none(self):
+        from database.models import compute_default_project_file_path
+        assert compute_default_project_file_path("", "MyProject") is None
+
+
+# ---------------------------------------------------------------------------
+# User operations
+# ---------------------------------------------------------------------------
+
+class TestUserOperations:
+    def test_upsert_user_inserts_new_user(self):
+        sb = _mock_sb(data_single=None)  # no existing user
+        with patch("database.models.get_sb", return_value=sb):
+            models.upsert_user("user-new", "new@example.com")
+        sb.table.return_value.insert.assert_called_once()
+
+    def test_upsert_user_updates_existing_user(self):
+        sb = _mock_sb(data_single={"id": "user-existing"})
+        with patch("database.models.get_sb", return_value=sb):
+            models.upsert_user("user-existing", "existing@example.com")
+        sb.table.return_value.update.assert_called()
+
+    def test_upsert_user_includes_phone_when_provided(self):
+        sb = _mock_sb(data_single=None)
+        with patch("database.models.get_sb", return_value=sb):
+            models.upsert_user("u1", "a@b.com", phone_number="+15550001111")
+        insert_payload = sb.table.return_value.insert.call_args[0][0]
+        assert insert_payload["phone_number"] == "+15550001111"
+
+    def test_get_user_id_by_telegram_chat_id_found(self):
+        sb = _mock_sb([{"id": "user-123"}])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_id_by_telegram_chat_id("456")
+        assert result == "user-123"
+
+    def test_get_user_id_by_telegram_chat_id_not_found(self):
+        sb = _mock_sb([])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_id_by_telegram_chat_id("999")
+        assert result is None
+
+    def test_get_user_phone_number_returns_phone(self):
+        sb = _mock_sb([{"phone_number": "+15559876543"}])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_phone_number("user-1")
+        assert result == "+15559876543"
+
+    def test_get_user_phone_number_returns_none_when_missing(self):
+        sb = _mock_sb([])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_phone_number("user-1")
+        assert result is None
+
+    def test_get_user_id_by_phone_found(self):
+        sb = _mock_sb([{"id": "user-abc"}])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_id_by_phone("+15550001111")
+        assert result == "user-abc"
+
+    def test_get_user_id_by_phone_not_found(self):
+        sb = _mock_sb([])
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_id_by_phone("+19999999999")
+        assert result is None
+
+    def test_update_user_phone_raises_on_duplicate(self):
+        sb = MagicMock()
+        sb.table.return_value.update.return_value.eq.return_value.execute.side_effect = Exception("unique constraint 23505")
+        with patch("database.models.get_sb", return_value=sb):
+            with pytest.raises(ValueError, match="already linked"):
+                models.update_user_phone_number("user-1", "+15550001111")
+
+
+# ---------------------------------------------------------------------------
+# Project operations
+# ---------------------------------------------------------------------------
+
+class TestProjectOperations:
+    def test_touch_project_calls_update(self):
+        sb = _mock_sb()
+        with patch("database.models.get_sb", return_value=sb):
+            models.touch_project("proj-1")
+        sb.table.return_value.update.assert_called_once()
+
+    def test_get_project_by_id_returns_row(self):
+        fake = {"id": "proj-1", "name": "Test"}
+        sb = _mock_sb(data_single=fake)
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_project_by_id("proj-1")
+        assert result["name"] == "Test"
+
+    def test_delete_project_calls_delete_on_projects_table(self):
+        sb = _mock_sb([])
+        with patch("database.models.get_sb", return_value=sb):
+            models.delete_project("proj-1")
+        # Verify projects table was deleted
+        calls = [str(c) for c in sb.table.call_args_list]
+        assert any("projects" in c for c in calls)
+
+    def test_get_user_tasks_flattens_project_name(self):
+        fake_tasks = [{"id": "t1", "projects": {"name": "MyApp"}, "description": "fix bug"}]
+        sb = _mock_sb(fake_tasks)
+        with patch("database.models.get_sb", return_value=sb):
+            tasks = models.get_user_tasks("user-1")
+        assert tasks[0]["project_name"] == "MyApp"
+        assert "projects" not in tasks[0]
+
+    def test_get_user_tasks_handles_no_project(self):
+        fake_tasks = [{"id": "t1", "projects": None, "description": "fix bug"}]
+        sb = _mock_sb(fake_tasks)
+        with patch("database.models.get_sb", return_value=sb):
+            tasks = models.get_user_tasks("user-1")
+        assert tasks[0]["project_name"] is None
+
+
+# ---------------------------------------------------------------------------
+# User preferences
+# ---------------------------------------------------------------------------
+
+class TestUserPreferences:
+    def _prefs_sb(self, prefs: dict):
+        """Return a mock sb that yields prefs row from user_preferences."""
+        sb = MagicMock()
+        result = MagicMock()
+        result.data = prefs
+        chain = MagicMock()
+        chain.execute.return_value = result
+        chain.eq.return_value = chain
+        chain.select.return_value = chain
+        chain.upsert.return_value = chain
+        chain.update.return_value = chain
+        chain.maybe_single.return_value = chain
+        chain.limit.return_value = chain
+        sb.table.return_value = chain
+        return sb
+
+    def test_get_default_provider_returns_cursor_for_unknown(self):
+        sb = self._prefs_sb({"default_provider": "unknown-tool"})
+        with patch("database.models.get_sb", return_value=sb), \
+             patch("database.models._ensure_user_preferences_row"):
+            result = models.get_default_provider_for_user("user-1")
+        assert result == "cursor"
+
+    def test_get_default_provider_returns_claude(self):
+        sb = self._prefs_sb({"default_provider": "claude"})
+        with patch("database.models.get_sb", return_value=sb), \
+             patch("database.models._ensure_user_preferences_row"):
+            result = models.get_default_provider_for_user("user-1")
+        assert result == "claude"
+
+    def test_set_default_provider_normalizes_invalid_to_cursor(self):
+        sb = self._prefs_sb({})
+        with patch("database.models.get_sb", return_value=sb), \
+             patch("database.models._ensure_user_preferences_row"):
+            models.set_default_provider_for_user("user-1", "BADVALUE")
+        update_payload = sb.table.return_value.update.call_args[0][0]
+        assert update_payload["default_provider"] == "cursor"
+
+    def test_get_terminal_access_returns_false_by_default(self):
+        sb = self._prefs_sb({})
+        with patch("database.models.get_sb", return_value=sb), \
+             patch("database.models._ensure_user_preferences_row"):
+            result = models.get_terminal_access_for_user("user-1")
+        assert result is False
+
+    def test_get_terminal_access_returns_true_when_granted(self):
+        sb = self._prefs_sb({"terminal_access_granted": True})
+        with patch("database.models.get_sb", return_value=sb), \
+             patch("database.models._ensure_user_preferences_row"):
+            result = models.get_terminal_access_for_user("user-1")
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# Terminal command operations
+# ---------------------------------------------------------------------------
+
+class TestTerminalCommandOperations:
+    def test_complete_terminal_command_updates_status(self):
+        sb = _mock_sb()
+        with patch("database.models.get_sb", return_value=sb):
+            models.complete_terminal_command(command_id="cmd-1", status="success", exit_code=0)
+        payload = sb.table.return_value.update.call_args[0][0]
+        assert payload["status"] == "success"
+        assert payload["exit_code"] == 0
+
+    def test_complete_terminal_command_sets_completed_at(self):
+        sb = _mock_sb()
+        with patch("database.models.get_sb", return_value=sb):
+            models.complete_terminal_command(command_id="cmd-1", status="failed")
+        payload = sb.table.return_value.update.call_args[0][0]
+        assert "completed_at" in payload
+
+    def test_update_call_session_sets_ended_at(self):
+        sb = _mock_sb()
+        with patch("database.models.get_sb", return_value=sb):
+            models.update_call_session("sess-1", "transcript text", ["cmd1"])
+        payload = sb.table.return_value.update.call_args[0][0]
+        assert "ended_at" in payload
+        assert payload["transcript"] == "transcript text"
+
+    def test_get_user_call_history_returns_list(self):
+        fake = [{"id": "s1"}, {"id": "s2"}]
+        sb = _mock_sb(fake)
+        with patch("database.models.get_sb", return_value=sb):
+            result = models.get_user_call_history("user-1")
+        assert len(result) == 2

@@ -1,0 +1,73 @@
+Mutation Testing Report — Demo 4
+Tool: mutmut 3.3.1
+Date: 2026-04-09
+Target modules:
+  - agents/command_builder.py
+  - services/security_analyzer.py
+
+=== Round 1: Before adding tests ===
+
+Total mutants generated: 317
+  survived:   70   (tests passed with broken code — real test gaps)
+  no tests:  247   (mutmut could not map tests to these mutants)
+
+Finding: 70 survived mutants concentrated in analyze_command_security_heuristic_fallback.
+The existing 2 tests (only rm -rf and ls) did not cover the mkfs, dd, chmod 777,
+curl|bash, wget|bash, warning patterns, or response structure keys.
+
+=== Round 2: After adding tests (37 new tests in test_security_analyzer.py) ===
+
+Total mutants: 317
+  survived:   49   (down from 70 — 21 mutants killed)
+  no tests:  186   (down from 247 — 61 mutants now have test coverage)
+
+Mutation score improvement: 70 → 49 survived  (+30% reduction)
+Tests added: 175 total (up from 140)
+
+=== What the new tests cover ===
+
+TestResponseStructure (4 tests)
+  - Every result (SAFE, WARNING, HIGH_RISK) must contain risk_level, risk_reason,
+    and plain_summary keys with non-empty string values.
+  - Kills mutants that rename or remove response dict keys.
+
+TestHighRiskPatterns (10 tests)
+  - One test per HIGH_RISK regex: rm -rf, mkfs, dd if=, >/dev/, curl|bash,
+    curl|sh, wget|bash, chmod 777.
+  - Plus: user_prompt is included in pattern scan (not just normalized_command).
+
+TestWarningPatterns (7 tests)
+  - One test per WARNING regex: curl, wget, npm install, pip install,
+    git push, git reset --hard.
+  - Verifies risk_reason and plain_summary are non-empty strings.
+
+TestSafeFallback (7 tests)
+  - Benign commands (ls, cat, grep, git status, echo, empty) return SAFE.
+
+TestNormalizeLevel (6 tests) — unit tests for _normalize_level helper
+  - SAFE/WARNING/HIGH_RISK passthrough.
+  - HIGHRISK (no underscore) normalization.
+  - Lowercase input normalization.
+  - Unknown/empty input defaults to WARNING.
+
+TestParseJsonObject (3 tests) — unit tests for _parse_json_object helper
+  - Plain JSON, markdown code fence, bare code fence.
+
+=== Remaining 49 survived mutants ===
+
+The 49 remaining are mainly:
+  - String literal mutations to error message text (e.g. lowercase/uppercase
+    of risk_reason values) — hard to kill without exact string matching, which
+    would make tests brittle and tightly coupled to error message wording.
+  - A known mutmut v3 runner isolation issue: mutmut copies source to a
+    mutants/ dir and runs tests there; async functions with module-level
+    imports can be loaded from the original path instead of the mutant, causing
+    some kills to not register. This does not affect the value of the test gap
+    findings.
+
+=== Commands to reproduce ===
+
+  cd server
+  mutmut run            # generate mutants and run tests
+  mutmut results        # view per-mutant outcomes
+  mutmut show <id>      # show what was changed in a specific mutant

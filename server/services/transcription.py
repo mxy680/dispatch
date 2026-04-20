@@ -3,12 +3,13 @@
 
 import logging
 import os
+from typing import Optional
 
 from openai import AsyncOpenAI
 
 logger = logging.getLogger("dispatch.transcription")
 
-_client: AsyncOpenAI | None = None
+_client: Optional[AsyncOpenAI] = None
 
 
 def _get_client() -> AsyncOpenAI:

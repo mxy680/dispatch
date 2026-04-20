@@ -128,6 +128,9 @@ class TestTelegramWebhookAPI:
         """A chat_id not seen before should trigger user creation + welcome message."""
         with patch("main.models.get_user_id_by_telegram_chat_id", return_value=None), \
              patch("main.models.upsert_user") as mock_upsert, \
+             patch("main.models.get_user_projects", return_value=[]), \
+             patch("main.models.get_terminal_access_for_user", return_value=False), \
+             patch("main.models.log_agent_event_task", return_value="log-1"), \
              patch("main.send_telegram_message") as mock_send:
 
             mock_send.return_value = None  # silence actual HTTP call

@@ -11,6 +11,9 @@ import re
 from typing import Annotated, Union, Optional, Literal
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, BackgroundTasks
 from fastapi import Response, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 from services.transcription import transcribe_file
 from supabase import create_client, Client
@@ -102,6 +105,11 @@ from agents.dispatcher import dispatch_task as agent_dispatch_task
 from agents.dispatcher import set_terminal_access, get_terminal_access
 
 app = FastAPI(title="Dispatch API")
+
+# --- RATE LIMITING ---
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # --- CONFIG ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -365,6 +373,7 @@ class VerifyOtpRequest(BaseModel):
 
 
 def _require_project_owner(user_id: str, project_id: str) -> dict:
+    """Fetch a project and assert the caller owns it. Raises 404/403 otherwise."""
     project = models.get_project_by_id(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -373,6 +382,7 @@ def _require_project_owner(user_id: str, project_id: str) -> dict:
     return project
 
 def _require_terminal_session_owner(user_id: str, session_id: str) -> dict:
+    """Fetch a terminal session and assert the caller owns it. Raises 404/403 otherwise."""
     session = models.get_terminal_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Terminal session not found")
@@ -381,6 +391,7 @@ def _require_terminal_session_owner(user_id: str, session_id: str) -> dict:
     return session
 
 def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
+    """Fetch a terminal command and assert the caller owns it. Raises 404/403 otherwise."""
     cmd = models.get_terminal_command(command_id)
     if not cmd:
         raise HTTPException(status_code=404, detail="Terminal command not found")
@@ -390,6 +401,7 @@ def _require_terminal_command_owner(user_id: str, command_id: str) -> dict:
 
 
 def _require_task_owner(user_id: str, task_id: str) -> dict:
+    """Fetch a task and assert the caller owns it. Raises 404/403 otherwise."""
     task = models.get_task_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -399,11 +411,13 @@ def _require_task_owner(user_id: str, task_id: str) -> dict:
 
 
 def _require_user_match(path_user_id: str, user_id: str) -> None:
+    """Assert that the path user_id matches the authenticated user. Raises 403 otherwise."""
     if path_user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _require_device_owner(user_id: str, device_id: str) -> dict:
+    """Fetch a device and assert it belongs to the authenticated user. Raises 404 otherwise."""
     devices = models.list_devices_for_user(user_id)
     dev = next((d for d in devices if d.get("id") == device_id), None)
     if not dev:
@@ -439,6 +453,10 @@ def _is_affirmation_intent(t: str) -> bool:
 
 
 def _load_state_context(raw: dict | None) -> dict:
+    """Extract and deserialize the context_json field from a conversation state row.
+
+    Returns an empty dict if the row is missing or context_json is not valid JSON.
+    """
     if not raw:
         return {}
     ctx = raw.get("context_json")
@@ -456,6 +474,11 @@ def _load_state_context(raw: dict | None) -> dict:
 
 
 def _classify_reply(text: str) -> str:
+    """Classify a free-text reply into one of: 'approve', 'reject', 'edit', 'question', 'empty', or 'command'.
+
+    Used by the voice/Telegram approval flow to decide how to handle a user's response
+    to a pending command without requiring exact keyword matches.
+    """
     t = (text or "").strip().lower()
     if not t:
         return "empty"
@@ -606,10 +629,11 @@ _E164_RE = _re.compile(r"^\+[1-9]\d{1,14}$")
 
 
 @app.post("/api/phone/send-otp")
-async def send_otp(request: SendOtpRequest, user: dict = Depends(get_current_user)):
-    if not _E164_RE.match(request.phone_number):
+@limiter.limit("5/minute")
+async def send_otp(request: Request, body: SendOtpRequest, user: dict = Depends(get_current_user)):
+    if not _E164_RE.match(body.phone_number):
         raise HTTPException(status_code=400, detail="Phone number must be in E.164 format (e.g. +12125551234)")
-    success = phone_verification.send_verification(request.phone_number)
+    success = phone_verification.send_verification(body.phone_number)
     if not success:
         raise HTTPException(status_code=502, detail="Failed to send verification code")
     return {"success": True}
@@ -752,8 +776,10 @@ async def link_project_for_current_device(
 
 # --- 5. THE CORE ENDPOINT (EAR + BRAIN + HANDS) ---
 @app.post("/transcribe")
+@limiter.limit("10/minute")
 async def transcribe_audio(
-    file: UploadFile = File(...), 
+    request: Request,
+    file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
     background_tasks: BackgroundTasks = None,
 ):
@@ -916,21 +942,23 @@ class TextCommandRequest(BaseModel):
     project_id: str | None = None
 
 @app.post("/transcribe-text")
+@limiter.limit("20/minute")
 async def transcribe_text(
-    request: TextCommandRequest,
+    request: Request,
+    body: TextCommandRequest,
     user: dict = Depends(get_current_user),
     background_tasks: BackgroundTasks = None,
 ):
     """Same pipeline as /transcribe but accepts text directly (skips Whisper STT)."""
     try:
-        transcript_text = request.text.strip()
+        transcript_text = body.text.strip()
         if not transcript_text:
             return {"status": "error", "message": "Empty text"}
 
-        if request.project_id:
+        if body.project_id:
             state = models.get_conversation_state(user_id=user.id, project_id=request.project_id)
             if state and state.get("state") == "awaiting_approval" and state.get("active_command_id"):
-                fake = ContextualReplyRequest(project_id=request.project_id, reply=transcript_text)
+                fake = ContextualReplyRequest(project_id=body.project_id, reply=transcript_text)
                 resolved = await resolve_contextual_reply(fake, user)
                 return {
                     "status": "success",
@@ -1301,7 +1329,8 @@ async def get_user_agent_executions(user_id: str, user: dict = Depends(get_curre
 
 
 @app.post("/api/agent/dispatch/{task_id}")
-async def manually_dispatch_agent(task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def manually_dispatch_agent(request: Request, task_id: str, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     """Manually trigger agent dispatch for a task."""
     task_dict = _require_task_owner(user.id, task_id)
     intent_data = {
