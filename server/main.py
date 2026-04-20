@@ -1030,6 +1030,19 @@ class TelegramWebhookRequest(BaseModel):
     update_id: int
     message: dict | None = None
     edited_message: dict | None = None
+
+
+def _parse_telegram_user_map() -> dict[str, str]:
+    raw = os.environ.get("TELEGRAM_USER_MAP", "")
+    if not raw:
+        return {}
+    mapping: dict[str, str] = {}
+    for pair in raw.split(","):
+        if not pair.strip() or ":" not in pair:
+            continue
+        chat_id, user_id = pair.split(":", 1)
+        mapping[chat_id.strip()] = user_id.strip()
+    return mapping
     
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(
@@ -1062,16 +1075,20 @@ async def telegram_webhook(
             return {"status": "ignored", "reason": "Empty chat_id or text"}
 
 
-        # 1. Authenticate user by chat_id (Manually for me only since this is a demo)
-        TELEGRAM_USER_MAP = {
-            # MY_CHAT_ID filled in for now
-            "8223456138": "682d660b-7cba-4962-9de0-32fb7ac2405b"
-        }
-
+        # 1. Authenticate user by chat_id.
+        telegram_user_map = _parse_telegram_user_map()
         created_user = False
         user_id = models.get_user_id_by_telegram_chat_id(chat_id)
         if not user_id:
-            user_id = TELEGRAM_USER_MAP.get(str(chat_id))
+            user_id = telegram_user_map.get(str(chat_id))
+            if user_id:
+                logger.info("telegram_webhook: mapped chat_id=%s to user_id=%s via TELEGRAM_USER_MAP", chat_id, user_id)
+                if not models.get_user_by_id(user_id):
+                    models.upsert_user(
+                        user_id=user_id,
+                        email=f"{user_id}@local",
+                        telegram_chat_id=str(chat_id),
+                    )
         if not user_id:
             pseudo_user_id = f"tg_{chat_id}"
             pseudo_email = f"tg_{chat_id}@telegram.local"

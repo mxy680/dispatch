@@ -108,6 +108,11 @@ def get_user_phone_number(user_id: str) -> str | None:
     return None
 
 
+def get_user_by_id(user_id: str) -> dict | None:
+    sb = get_sb()
+    return _execute_single(sb.table("users").select("*").eq("id", user_id))
+
+
 # ==================== PROJECTS ====================
 
 def create_project(user_id, name, file_path=None):
