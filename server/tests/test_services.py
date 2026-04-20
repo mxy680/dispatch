@@ -133,7 +133,6 @@ class TestTranscription:
         monkeypatch.setenv("GROQ_API_KEY", "test-key")
         import services.transcription as t
 
-        # Create a dummy audio file
         audio = tmp_path / "test.mp3"
         audio.write_bytes(b"fake audio data")
 
@@ -149,4 +148,120 @@ class TestTranscription:
         t._client = mock_client
         result = await t.transcribe_file(str(audio))
         assert result == "Hello world"
+        t._client = None
+
+    async def test_transcribe_file_missing_api_key(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        import services.transcription as t
+        t._client = None
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        with pytest.raises(RuntimeError, match="GROQ_API_KEY is not configured"):
+            await t.transcribe_file(str(audio))
+        t._client = None
+
+    async def test_transcribe_file_timeout(self, tmp_path):
+        import httpx
+        from openai import APITimeoutError
+        import services.transcription as t
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        mock_transcriptions = AsyncMock()
+        mock_transcriptions.create = AsyncMock(
+            side_effect=APITimeoutError(request=httpx.Request("POST", "https://api.groq.com"))
+        )
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions = mock_transcriptions
+        t._client = mock_client
+
+        with pytest.raises(RuntimeError, match="request timed out"):
+            await t.transcribe_file(str(audio))
+        t._client = None
+
+    async def test_transcribe_file_connection_error(self, tmp_path):
+        import httpx
+        from openai import APIConnectionError
+        import services.transcription as t
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        mock_transcriptions = AsyncMock()
+        mock_transcriptions.create = AsyncMock(
+            side_effect=APIConnectionError(request=httpx.Request("POST", "https://api.groq.com"))
+        )
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions = mock_transcriptions
+        t._client = mock_client
+
+        with pytest.raises(RuntimeError, match="could not reach the Groq API"):
+            await t.transcribe_file(str(audio))
+        t._client = None
+
+    async def test_transcribe_file_rate_limited(self, tmp_path):
+        import httpx
+        from openai import APIStatusError
+        import services.transcription as t
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        mock_transcriptions = AsyncMock()
+        mock_transcriptions.create = AsyncMock(
+            side_effect=APIStatusError(
+                "rate limited",
+                response=httpx.Response(429, request=httpx.Request("POST", "https://api.groq.com")),
+                body=None,
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions = mock_transcriptions
+        t._client = mock_client
+
+        with pytest.raises(RuntimeError, match="rate limit reached"):
+            await t.transcribe_file(str(audio))
+        t._client = None
+
+    async def test_transcribe_file_api_status_error(self, tmp_path):
+        import httpx
+        from openai import APIStatusError
+        import services.transcription as t
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        mock_transcriptions = AsyncMock()
+        mock_transcriptions.create = AsyncMock(
+            side_effect=APIStatusError(
+                "internal server error",
+                response=httpx.Response(500, request=httpx.Request("POST", "https://api.groq.com")),
+                body=None,
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions = mock_transcriptions
+        t._client = mock_client
+
+        with pytest.raises(RuntimeError, match="service returned an error \\(500\\)"):
+            await t.transcribe_file(str(audio))
+        t._client = None
+
+    async def test_transcribe_file_unexpected_error(self, tmp_path):
+        import services.transcription as t
+
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"fake audio data")
+
+        mock_transcriptions = AsyncMock()
+        mock_transcriptions.create = AsyncMock(side_effect=Exception("something weird"))
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions = mock_transcriptions
+        t._client = mock_client
+
+        with pytest.raises(RuntimeError, match="unexpected error occurred"):
+            await t.transcribe_file(str(audio))
         t._client = None
