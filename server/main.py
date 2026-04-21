@@ -779,9 +779,9 @@ async def link_project_for_current_device(
 @limiter.limit("10/minute")
 async def transcribe_audio(
     request: Request,
-    file: UploadFile = File(...),
+    file: Annotated[UploadFile, File(...)],
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
-    background_tasks: BackgroundTasks = None,
 ):
     """
     1. Transcribes Audio (Whisper)
@@ -903,18 +903,9 @@ async def transcribe_audio(
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
         if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
-            if background_tasks:
-                background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
-                agent_status = "dispatching"
-                logger.info("agent dispatch queued task_id=%s terminal=%s", dispatch_task_id, terminal_granted)
-            else:
-                # Fallback: run synchronously
-                try:
-                    pipeline_result = agent_dispatch_task(dispatch_task_id, intent_data, terminal_granted)
-                    agent_status = pipeline_result.get("status", "unknown")
-                except Exception as ae:
-                    agent_status = f"dispatch_error: {ae}"
-                    logger.warning("agent dispatch error task_id=%s err=%r", dispatch_task_id, ae)
+            background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+            agent_status = "dispatching"
+            logger.info("agent dispatch queued task_id=%s terminal=%s", dispatch_task_id, terminal_granted)
 
         return {
             "status": "success",
@@ -946,8 +937,8 @@ class TextCommandRequest(BaseModel):
 async def transcribe_text(
     request: Request,
     body: TextCommandRequest,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
-    background_tasks: BackgroundTasks = None,
 ):
     """Same pipeline as /transcribe but accepts text directly (skips Whisper STT)."""
     try:
@@ -956,7 +947,7 @@ async def transcribe_text(
             return {"status": "error", "message": "Empty text"}
 
         if body.project_id:
-            state = models.get_conversation_state(user_id=user.id, project_id=request.project_id)
+            state = models.get_conversation_state(user_id=user.id, project_id=body.project_id)
             if state and state.get("state") == "awaiting_approval" and state.get("active_command_id"):
                 fake = ContextualReplyRequest(project_id=body.project_id, reply=transcript_text)
                 resolved = await resolve_contextual_reply(fake, user)
@@ -1032,9 +1023,8 @@ async def transcribe_text(
         agent_status = None
         terminal_granted = get_terminal_access(user.id)
         if intent_type in ("create_task", "create_project", "fix_bug") and dispatch_task_id:
-            if background_tasks:
-                background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
-                agent_status = "dispatching"
+            background_tasks.add_task(agent_dispatch_task, dispatch_task_id, intent_data, terminal_granted)
+            agent_status = "dispatching"
 
         return {
             "status": "success",
