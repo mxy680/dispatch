@@ -1,3 +1,4 @@
+"""Integration tests for the full voice/text dispatch pipeline via FastAPI TestClient."""
 import pytest
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient

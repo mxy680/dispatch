@@ -1,3 +1,4 @@
+"""Unit tests for companion device model functions in database/models.py."""
 from database import models
 
 

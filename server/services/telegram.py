@@ -10,6 +10,7 @@ TELEGRAM_API = "https://api.telegram.org"
 
 
 def get_token() -> str:
+    """Return the Telegram bot token from the environment; raises RuntimeError if unset."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")

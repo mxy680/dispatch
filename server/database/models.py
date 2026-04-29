@@ -201,22 +201,26 @@ def delete_project(project_id: str):
 
 
 def get_user_projects(user_id):
+    """Return all projects for a user, ordered by most recently accessed."""
     sb = get_sb()
     res = sb.table("projects").select("*").eq("user_id", user_id).order("last_accessed", desc=True).execute()
     return res.data or []
 
 
 def get_project_by_id(project_id):
+    """Return a single project row by UUID, or None if not found."""
     sb = get_sb()
     return _execute_single(sb.table("projects").select("*").eq("id", project_id))
 
 
 def get_project_by_name(user_id, name):
+    """Return a project row matching the user and name (case-insensitive), or None."""
     sb = get_sb()
     return _execute_single(sb.table("projects").select("*").eq("user_id", user_id).ilike("name", name))
 
 
 def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = None) -> dict:
+    """Return an existing project by name or create it; update file_path if provided."""
     existing = get_project_by_name(user_id, name)
     if existing:
         # If caller provided file_path, use it.
@@ -253,6 +257,7 @@ def upsert_project_by_name(*, user_id: str, name: str, file_path: str | None = N
 
 
 def get_user_projects_with_task_counts(user_id):
+    """Return projects with task counts via Supabase RPC for dashboard display."""
     sb = get_sb()
     res = sb.rpc("get_user_projects_with_task_counts", {"p_user_id": user_id}).execute()
     return res.data or []
@@ -276,6 +281,7 @@ def _ensure_user_preferences_row(user_id: str) -> None:
 
 
 def get_user_preferences(user_id: str) -> dict:
+    """Return the user_preferences row, creating it with defaults if missing."""
     _ensure_user_preferences_row(user_id)
     sb = get_sb()
     row = _execute_single(sb.table("user_preferences").select("*").eq("user_id", user_id))
@@ -283,6 +289,7 @@ def get_user_preferences(user_id: str) -> dict:
 
 
 def get_default_provider_for_user(user_id: str) -> str:
+    """Return the user's preferred agent provider (``cursor``, ``claude``, or ``shell``)."""
     prefs = get_user_preferences(user_id)
     provider = (prefs.get("default_provider") or "cursor").strip().lower()
     if provider not in {"cursor", "claude", "shell"}:
@@ -291,6 +298,7 @@ def get_default_provider_for_user(user_id: str) -> str:
 
 
 def set_default_provider_for_user(user_id: str, provider: str) -> None:
+    """Persist the user's preferred agent provider; invalid values fall back to ``cursor``."""
     provider = (provider or "").strip().lower()
     if provider not in {"cursor", "claude", "shell"}:
         provider = "cursor"
@@ -300,18 +308,21 @@ def set_default_provider_for_user(user_id: str, provider: str) -> None:
 
 
 def set_terminal_access_for_user(user_id: str, granted: bool) -> None:
+    """Grant or revoke terminal command execution permission for a user."""
     _ensure_user_preferences_row(user_id)
     sb = get_sb()
     sb.table("user_preferences").update({"terminal_access_granted": granted}).eq("user_id", user_id).execute()
 
 
 def get_terminal_access_for_user(user_id: str) -> bool:
+    """Return whether terminal command execution is enabled for a user."""
     prefs = get_user_preferences(user_id)
     return bool(prefs.get("terminal_access_granted"))
 
 # ==================== PROJECT BASE PATH ====================
 
 def get_project_base_path_for_user(user_id: str) -> str | None:
+    """Return the user's configured local project base directory, or None."""
     prefs = get_user_preferences(user_id)
     base_path = prefs.get("project_base_path")
     if not base_path:
@@ -321,6 +332,7 @@ def get_project_base_path_for_user(user_id: str) -> str | None:
 
 
 def set_project_base_path_for_user(user_id: str, base_path: str | None) -> None:
+    """Persist the local project base directory for a user; pass None to clear it."""
     _ensure_user_preferences_row(user_id)
     base_path = (base_path or "").strip()
     sb = get_sb()
@@ -342,6 +354,7 @@ def _safe_project_folder_name(name: str) -> str:
 
 
 def compute_default_project_file_path(base_path: str | None, project_name: str) -> str | None:
+    """Build a default local path by joining base_path with a sanitized project folder name."""
     if not base_path:
         return None
     base_path = str(base_path).strip()
@@ -362,6 +375,7 @@ def create_task(
     intent_confidence=None,
     output_summary=None,
 ):
+    """Insert a new task row and return its UUID string."""
     sb = get_sb()
     task_id = str(uuid.uuid4())
     sb.table("tasks").insert({
@@ -390,6 +404,7 @@ def log_agent_event_task(
     output_summary: str | None,
     voice_command: str | None = None,
 ):
+    """Resolve or create a project, then create a task under it. Returns the new task UUID."""
     project_id = None
     if project_name:
         p = next((p for p in projects if (p.get("name", "").lower() == project_name.lower())), None)
@@ -418,6 +433,7 @@ def log_agent_event_task(
 
 
 def get_user_tasks(user_id: str):
+    """Return all tasks for a user with project names flattened, newest first."""
     sb = get_sb()
     res = sb.table("tasks").select("*, projects(name)").eq("user_id", user_id).order("created_at", desc=True).execute()
     raw_rows = res.data or []
@@ -434,12 +450,14 @@ def get_user_tasks(user_id: str):
 
 
 def get_project_tasks(project_id):
+    """Return all tasks for a project, newest first."""
     sb = get_sb()
     res = sb.table("tasks").select("*").eq("project_id", project_id).order("created_at", desc=True).execute()
     return res.data or []
 
 
 def update_task_status(task_id, status):
+    """Update the status of a task; sets completed_at when status is ``completed``."""
     sb = get_sb()
     data = {"status": status}
     if status == "completed":
@@ -448,12 +466,14 @@ def update_task_status(task_id, status):
 
 
 def get_task_by_id(task_id: str) -> dict | None:
+    """Return a single task row by UUID, or None if not found."""
     sb = get_sb()
     res = sb.table("tasks").select("*").eq("id", task_id).limit(1).execute()
     return _first_or_none(res)
 
 
 def set_task_terminal_session(task_id: str, terminal_session_id: str | None) -> None:
+    """Link or unlink a terminal session to a task."""
     sb = get_sb()
     sb.table("tasks").update({"terminal_session_id": terminal_session_id}).eq("id", task_id).execute()
 
@@ -468,6 +488,7 @@ def get_user_id_by_phone(phone_number: str) -> str | None:
     return data["id"] if data else None
 
 def create_call_session(user_id, phone_number):
+    """Create a new Twilio call session row and return its UUID."""
     sb = get_sb()
     session_id = str(uuid.uuid4())
     sb.table("call_sessions").insert({
@@ -479,6 +500,7 @@ def create_call_session(user_id, phone_number):
 
 
 def update_call_session(session_id, transcript, commands_executed):
+    """Save the final transcript and command count to a call session and mark it ended."""
     sb = get_sb()
     sb.table("call_sessions").update({
         "transcript": transcript,
@@ -488,6 +510,7 @@ def update_call_session(session_id, transcript, commands_executed):
 
 
 def get_user_call_history(user_id, limit=10):
+    """Return the most recent call sessions for a user, newest first."""
     sb = get_sb()
     res = sb.table("call_sessions").select("*").eq("user_id", user_id).order("started_at", desc=True).limit(limit).execute()
     return res.data or []
@@ -503,6 +526,7 @@ def create_agent_execution(
     refined_prompt: str = None,
     status: str = "pending",
 ) -> str:
+    """Insert an agent_executions row to track a pipeline stage. Returns the execution UUID."""
     sb = get_sb()
     exec_id = str(uuid.uuid4())
     sb.table("agent_executions").insert({
@@ -527,6 +551,7 @@ def update_agent_execution(
     execution_time_ms: int = None,
     terminal_command_id: str | None = None,
 ):
+    """Update an agent execution row with its final status and optional result fields."""
     sb = get_sb()
     data = {
         "status": status,
@@ -549,6 +574,7 @@ def store_agent_feedback(
     explanation: str,
     status: str,
 ):
+    """Persist the final copilot agent output as a completed agent_executions row."""
     sb = get_sb()
     exec_id = str(uuid.uuid4())
     sb.table("agent_executions").insert({
@@ -565,18 +591,21 @@ def store_agent_feedback(
 
 
 def get_agent_executions(task_id: str) -> list:
+    """Return all agent execution rows for a task, ordered by creation time."""
     sb = get_sb()
     res = sb.table("agent_executions").select("*").eq("task_id", task_id).order("created_at").execute()
     return res.data or []
 
 
 def get_task_agent_status(task_id: str) -> dict:
+    """Return the most recent agent execution row for a task, or a default no-op dict."""
     sb = get_sb()
     res = sb.table("agent_executions").select("*").eq("task_id", task_id).order("created_at", desc=True).limit(1).execute()
     return _first_or_none(res) or {"status": "none", "stage": "none"}
 
 
 def get_user_agent_executions(user_id: str, limit: int = 20) -> list:
+    """Return recent agent executions for a user with task and project info flattened."""
     sb = get_sb()
     res = (
         sb.table("agent_executions")
@@ -617,6 +646,7 @@ def register_instance(
     status: str = "starting",
     metadata: dict | None = None,
 ) -> dict:
+    """Upsert a local agent daemon instance row and return the full row dict."""
     sb = get_sb()
     existing = None
     if instance_token:
@@ -656,11 +686,13 @@ def register_instance(
 
 
 def get_instance_by_id(instance_id: str) -> dict | None:
+    """Return a local agent instance row by UUID, or None."""
     sb = get_sb()
     return _execute_single(sb.table("instances").select("*").eq("id", instance_id))
 
 
 def update_instance_heartbeat(*, instance_id: str, status: str = "online") -> None:
+    """Refresh the last_heartbeat timestamp and status for a local agent instance."""
     sb = get_sb()
     sb.table("instances").update({
         "status": status,
@@ -669,6 +701,7 @@ def update_instance_heartbeat(*, instance_id: str, status: str = "online") -> No
 
 
 def get_active_instances_for_project(project_id: str, within_seconds: int = 60) -> list[dict]:
+    """Return instances that sent a heartbeat within the last ``within_seconds`` seconds."""
     sb = get_sb()
     from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=within_seconds)).isoformat()
@@ -684,6 +717,7 @@ def get_active_instances_for_project(project_id: str, within_seconds: int = 60) 
 
 
 def get_active_instances_for_user(user_id: str, within_seconds: int = 60) -> list[dict]:
+    """Return all active instances for a user within the heartbeat window."""
     sb = get_sb()
     from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=within_seconds)).isoformat()
@@ -708,6 +742,7 @@ def create_terminal_session(
     instance_id: str | None = None,
     status: str = "pending",
 ) -> str:
+    """Create a terminal session row and return its UUID."""
     sb = get_sb()
     session_id = str(uuid.uuid4())
     sb.table("terminal_sessions").insert({
@@ -722,11 +757,13 @@ def create_terminal_session(
 
 
 def touch_terminal_session(session_id: str) -> None:
+    """Update the updated_at timestamp on a terminal session."""
     sb = get_sb()
     sb.table("terminal_sessions").update({"updated_at": _now_iso()}).eq("id", session_id).execute()
 
 
 def set_terminal_session_status(session_id: str, status: str, closed: bool = False) -> None:
+    """Set the status of a terminal session; optionally record a closed_at timestamp."""
     sb = get_sb()
     data = {"status": status, "updated_at": _now_iso()}
     if closed:
@@ -735,6 +772,7 @@ def set_terminal_session_status(session_id: str, status: str, closed: bool = Fal
 
 
 def bind_terminal_session_instance(session_id: str, instance_id: str | None) -> None:
+    """Associate or disassociate a local agent instance with a terminal session."""
     sb = get_sb()
     sb.table("terminal_sessions").update({
         "instance_id": instance_id,
@@ -743,12 +781,14 @@ def bind_terminal_session_instance(session_id: str, instance_id: str | None) -> 
 
 
 def get_terminal_session(session_id: str) -> dict | None:
+    """Return a terminal session row by UUID, or None."""
     sb = get_sb()
     res = sb.table("terminal_sessions").select("*").eq("id", session_id).limit(1).execute()
     return _first_or_none(res)
 
 
 def list_terminal_sessions_for_project(*, user_id: str, project_id: str) -> list[dict]:
+    """Return all terminal sessions for a user's project, newest first."""
     sb = get_sb()
     res = (
         sb.table("terminal_sessions")
@@ -772,6 +812,7 @@ def create_terminal_command(
     normalized_command: str | None = None,
     status: str = "queued",
 ) -> str:
+    """Insert a terminal command row in ``queued`` status and initialize its sidecar risk record."""
     sb = get_sb()
     command_id = str(uuid.uuid4())
     normalized = normalized_command or command
@@ -799,6 +840,7 @@ def create_terminal_command(
 
 
 def list_terminal_commands_for_session(*, user_id: str, session_id: str, limit: int = 100) -> list[dict]:
+    """Return terminal commands for a session enriched with sidecar risk data."""
     sb = get_sb()
     res = (
         sb.table("terminal_commands")
@@ -813,6 +855,7 @@ def list_terminal_commands_for_session(*, user_id: str, session_id: str, limit: 
 
 
 def get_terminal_command(command_id: str) -> dict | None:
+    """Return a terminal command row enriched with sidecar risk data, or None."""
     sb = get_sb()
     res = sb.table("terminal_commands").select("*").eq("id", command_id).limit(1).execute()
     return _sidecar.enrich_command(_first_or_none(res))
@@ -825,6 +868,7 @@ def get_or_create_terminal_session_for_project(
     name: str = "Unified Session",
     within_seconds: int = 180,
 ) -> dict:
+    """Return a recent open session for the project or create a new one; binds active instance."""
     active = get_active_instances_for_user(user_id, within_seconds=within_seconds)
     instance_id = active[0]["id"] if active else None
 
@@ -867,6 +911,7 @@ def list_recent_terminal_commands_for_user(
     user_id: str,
     limit: int = 100,
 ) -> list[dict]:
+    """Return the most recent terminal commands for a user with session and project info flattened."""
     sb = get_sb()
     res = (
         sb.table("terminal_commands")
@@ -1038,6 +1083,7 @@ def complete_terminal_command(
     status: str,
     exit_code: int | None = None,
 ) -> None:
+    """Mark a terminal command as completed or failed with an optional exit code."""
     sb = get_sb()
     sb.table("terminal_commands").update({
         "status": status,
@@ -1054,6 +1100,7 @@ def update_terminal_command_for_approval(
     normalized_command: str | None = None,
     reset_risk_pending: bool = False,
 ) -> dict | None:
+    """Update a command's approval status and optionally reset its risk assessment."""
     sb = get_sb()
     payload = {"status": status}
     if command is not None:
@@ -1079,6 +1126,7 @@ def update_command_risk_assessment(
     plain_summary: str | None = None,
     user_id: str | None = None,
 ) -> None:
+    """Write the AI security risk classification to the sidecar store for a command."""
     level = (risk_level or "PENDING").strip().upper()
     if level not in {"PENDING", "SAFE", "WARNING", "HIGH_RISK"}:
         level = "WARNING"
@@ -1108,6 +1156,7 @@ def append_terminal_log_chunk(
     stream: str,
     chunk: str,
 ) -> None:
+    """Insert a single streamed log chunk (stdout/stderr) for a terminal command."""
     sb = get_sb()
     log_id = str(uuid.uuid4())
     sb.table("terminal_logs").insert({
@@ -1125,6 +1174,7 @@ def get_terminal_logs_for_command(
     after_sequence: int | None = None,
     limit: int = 200,
 ) -> list[dict]:
+    """Return log chunks for a command, optionally starting after a given sequence number."""
     sb = get_sb()
     query = sb.table("terminal_logs").select("*").eq("command_id", command_id)
     if after_sequence is not None:
@@ -1143,6 +1193,7 @@ def add_conversation_turn(
     turn_type: str,
     content: str,
 ) -> dict:
+    """Append a conversation turn to the local sidecar store and return the new row."""
     return _sidecar.add_conversation_turn(
         user_id=user_id,
         project_id=project_id,
@@ -1155,10 +1206,12 @@ def add_conversation_turn(
 
 
 def list_conversation_turns_for_user(*, user_id: str, project_id: str | None = None, limit: int = 100) -> list[dict]:
+    """Return recent conversation turns from the sidecar, optionally filtered by project."""
     return _sidecar.list_conversation_turns_for_user(user_id=user_id, project_id=project_id, limit=limit)
 
 
 def get_conversation_state(*, user_id: str, project_id: str | None) -> dict | None:
+    """Return the current conversation state row from sidecar, or None."""
     return _normalize_conversation_state_row(
         _sidecar.get_conversation_state(user_id=user_id, project_id=project_id)
     )
@@ -1172,6 +1225,7 @@ def upsert_conversation_state(
     active_command_id: str | None,
     context_json: dict | None = None,
 ) -> dict:
+    """Insert or update the approval-gate conversation state in the sidecar store."""
     row = _sidecar.upsert_conversation_state(
         user_id=user_id,
         project_id=project_id,
@@ -1255,6 +1309,7 @@ def _hash_agent_token(token: str) -> str:
 
 
 def create_agent_token(*, user_id: str, label: str | None = None) -> dict:
+    """Generate and store a new agent token; returns ``{token_id, token, label}``."""
     sb = get_sb()
     token_id = str(uuid.uuid4())
     token = secrets.token_urlsafe(32)
@@ -1269,6 +1324,7 @@ def create_agent_token(*, user_id: str, label: str | None = None) -> dict:
 
 
 def list_agent_tokens(*, user_id: str) -> list[dict]:
+    """Return all agent tokens for a user (excludes raw token hash), newest first."""
     sb = get_sb()
     res = (
         sb.table("agent_tokens")
@@ -1281,11 +1337,13 @@ def list_agent_tokens(*, user_id: str) -> list[dict]:
 
 
 def revoke_agent_token(*, user_id: str, token_id: str) -> None:
+    """Soft-delete an agent token by setting its revoked_at timestamp."""
     sb = get_sb()
     sb.table("agent_tokens").update({"revoked_at": _now_iso()}).eq("id", token_id).eq("user_id", user_id).execute()
 
 
 def get_user_id_for_agent_token(token: str) -> str | None:
+    """Validate an agent token and return the owner's user_id, or None if invalid/revoked."""
     sb = get_sb()
     token_hash = _hash_agent_token(token)
     res = (
@@ -1310,6 +1368,7 @@ def _hash_device_token(token: str) -> str:
 
 
 def create_device_pairing(*, user_id: str, name: str | None, platform: str | None, expires_minutes: int = 10) -> dict:
+    """Create a companion device pairing row with a short-lived pairing code."""
     sb = get_sb()
     device_id = str(uuid.uuid4())
     pairing_code = secrets.token_urlsafe(8)
@@ -1327,6 +1386,7 @@ def create_device_pairing(*, user_id: str, name: str | None, platform: str | Non
 
 
 def complete_device_pairing(*, pairing_code: str, device_name: str | None = None, platform: str | None = None) -> dict | None:
+    """Validate a pairing code, issue a device token, and activate the device."""
     sb = get_sb()
     res = (
         sb.table("companion_devices")
@@ -1361,6 +1421,7 @@ def complete_device_pairing(*, pairing_code: str, device_name: str | None = None
 
 
 def get_device_by_token(device_token: str) -> dict | None:
+    """Look up a companion device by its raw token; returns the row or None."""
     sb = get_sb()
     token_hash = _hash_device_token(device_token)
     res = sb.table("companion_devices").select("*").eq("device_token_hash", token_hash).limit(1).execute()
@@ -1368,6 +1429,7 @@ def get_device_by_token(device_token: str) -> dict | None:
 
 
 def touch_device_heartbeat(device_id: str) -> None:
+    """Refresh last_heartbeat and set status to online for a companion device."""
     sb = get_sb()
     sb.table("companion_devices").update({
         "status": "online",
@@ -1376,6 +1438,7 @@ def touch_device_heartbeat(device_id: str) -> None:
 
 
 def list_devices_for_user(user_id: str) -> list[dict]:
+    """Return all companion devices registered to a user, newest first."""
     sb = get_sb()
     res = (
         sb.table("companion_devices")
@@ -1388,6 +1451,7 @@ def list_devices_for_user(user_id: str) -> list[dict]:
 
 
 def link_device_project(*, device_id: str, project_id: str, local_path: str | None = None) -> dict:
+    """Create or update the device-project link row; returns the link dict."""
     sb = get_sb()
     res = (
         sb.table("device_project_links")
@@ -1444,6 +1508,7 @@ def _link_device_project_local_path_if_missing(*, device_id: str, project_id: st
 
 
 def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, project_id: str, local_path: str) -> None:
+    """Propagate local_path to device_project_links for all devices owned by a user."""
     devices = list_devices_for_user(user_id)
     for d in devices:
         _link_device_project_local_path_if_missing(
@@ -1454,6 +1519,7 @@ def link_device_project_local_path_if_missing_for_user_devices(*, user_id: str, 
 
 
 def get_device_project_links(device_id: str) -> list[dict]:
+    """Return all project links for a companion device."""
     sb = get_sb()
     res = (
         sb.table("device_project_links")
@@ -1473,6 +1539,7 @@ def save_cursor_context(
     selection: str | None,
     diagnostics: str | None,
 ) -> str:
+    """Snapshot the current Cursor IDE context (file, selection, diagnostics) and return the row UUID."""
     sb = get_sb()
     context_id = str(uuid.uuid4())
     sb.table("cursor_context_snapshots").insert({
@@ -1487,6 +1554,7 @@ def save_cursor_context(
 
 
 def get_latest_cursor_context(*, device_id: str, project_id: str) -> dict | None:
+    """Return the most recent Cursor context snapshot for a device and project."""
     sb = get_sb()
     return _execute_single(
         sb.table("cursor_context_snapshots")
