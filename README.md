@@ -260,7 +260,7 @@ dispatch/
 | Member | Role | Key Contributions |
 |---|---|---|
 | Mark Shteyn | Full-stack Lead | Project initialization; Next.js frontend (dashboard, bento grid, shadcn/ui); FastAPI server bootstrap; SQLite → Supabase Postgres migration; Groq integration; Twilio SMS OTP; real-time log streaming; agent command claiming and stale-command recovery |
-| Zeynep Baştaş | Testing & Backend | Full pytest test suite (474 tests, 88% coverage); CI/CD GitHub Actions pipeline; mutation testing with mutmut; property-based testing with Hypothesis; rate limiting via slowapi; Twilio voice webhooks and call history; transcription error handling; Python 3.9 compatibility |
+| Zeynep Baştaş | Testing, Backend & Project Coordination | Full pytest test suite (474 tests, 88% coverage); CI/CD GitHub Actions pipeline; mutation testing with mutmut; property-based testing with Hypothesis; rate limiting via slowapi; Twilio voice webhooks and call history; transcription error handling; Python 3.9 compatibility; Trello board setup and sprint tracking; TA communication and in-team coordination |
 | Paulo Aguiar | Integrations | Telegram bot (bulk implementation and webhook handler); local agent daemon; initial project structure and database schema for intent parsing and call logs |
 | Ali Nawaf | Security | AI security analyzer agent; various backend bug fixes and .gitignore maintenance |
 
