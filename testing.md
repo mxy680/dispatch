@@ -88,8 +88,16 @@ Frontend tests cover the `unified-command-center` component and the Supabase acc
 cd server
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt pytest pytest-asyncio pytest-cov hypothesis eval_type_backport
+pip install -r requirements.txt
+pip install pytest pytest-cov        # test runner + coverage (not in requirements.txt)
 ```
+
+> `hypothesis` and `eval_type_backport` are already included in `requirements.txt` and will be installed by the first command.
+
+**Test configuration** — `server/pytest.ini` sets:
+- `asyncio_mode = auto` — all async tests run without `@pytest.mark.asyncio`
+- `testpaths = tests` — pytest discovers tests in `server/tests/` only
+- `pythonpath = .` — `server/` is on `sys.path` so imports work without install
 
 No real API keys are needed. Set these environment variables (or let the defaults apply — `conftest.py` patches the Supabase client):
 
@@ -120,6 +128,14 @@ python -m pytest tests/test_security_analyzer.py -v
 ```
 
 ### Run mutation testing
+
+`mutmut` is not included in `requirements.txt` — install it once separately:
+
+```bash
+pip install mutmut
+```
+
+Then run from the `server/` directory:
 
 ```bash
 cd server
