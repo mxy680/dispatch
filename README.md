@@ -265,7 +265,7 @@ python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 - `normalize_provider(s)` always returns one of `{cursor, claude, shell}`
 - `build_provider_command(provider, prompt)` always contains the prompt and required flags
 
-**3. Mutation testing** with `mutmut` was applied to `agents/command_builder.py` and `services/security_analyzer.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 49 (30% improvement). See `demo 4/mutation_report.txt`.
+**3. Mutation testing** with `mutmut` was applied to `agents/command_builder.py` and `services/security_analyzer.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 2 (97% killed). The 2 remaining are equivalent mutants — the mutation produces identical observable behavior, making them impossible to kill without brittle tests. See `demo 4/mutation_report.txt`.
 
 ```bash
 cd server && mutmut run && mutmut results
@@ -366,7 +366,7 @@ dispatch/
 
 - **AI-assisted development** — Cursor handled frontend scaffolding and Claude Code handled test infrastructure, which cut boilerplate time significantly. Both tools were used with code review before merging.
 - **Security-first design** — The approval gate and AI security analyzer were built early, so every subsequent feature inherited those guarantees without retrofit work.
-- **Mutation testing payoff** — Running mutmut revealed 70 surviving mutants in the security analyzer that normal coverage metrics didn't surface. Closing 30% of those with targeted tests gave much higher confidence in the most critical module.
+- **Mutation testing payoff** — Running mutmut revealed 70 surviving mutants in the security analyzer that normal coverage metrics didn't surface. Targeted tests killed 68 of them (97%), leaving only 2 equivalent mutants that produce identical behavior and cannot be killed without brittle assertions. This gave far higher confidence in the most critical module than line coverage alone.
 - **Mock-based CI from day one** — The shared `conftest.py` Supabase mock let every contributor write and run tests without real credentials, and the GitHub Actions pipeline worked from the first commit.
 
 ### What we would do differently

@@ -70,7 +70,7 @@ web/
 - `normalize_provider(s)` always returns one of `{cursor, claude, shell}`
 - `build_provider_command(provider, prompt)` always contains the prompt and required flags
 
-**3. Mutation testing (mutmut)** — Applied to `services/security_analyzer.py` and `agents/command_builder.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 49 (30% improvement). The mutation config is in `server/mutmut_config.py`.
+**3. Mutation testing (mutmut)** — Applied to `services/security_analyzer.py` and `agents/command_builder.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 2 (97% killed). The 2 remaining are equivalent mutants — they produce identical observable behavior regardless of the mutation, making them unkillable without brittle exact-string assertions. The mutation config is in `server/mutmut_config.py`.
 
 **4. CI/CD regression testing** — GitHub Actions (`.github/workflows/test.yml`) runs the full suite on every push to every branch. Coverage is uploaded as an artifact on each run.
 
@@ -169,7 +169,7 @@ open coverage_html/index.html
 
 Mutation testing results are documented in [`demo 4/mutation_report.txt`](demo%204/mutation_report.txt). The mutmut configuration is at [`server/mutmut_config.py`](server/mutmut_config.py).
 
-**Result:** 70 surviving mutants in `security_analyzer.py` reduced to 49 (30% killed) after targeted test additions. This uncovered 21 edge cases that line coverage alone would not have caught.
+**Result:** 70 surviving mutants in `security_analyzer.py` reduced to 2 (97% killed) after targeted test additions. The 2 remaining are equivalent mutants — identical observable behavior, unkillable without brittle exact-string coupling. This uncovered 68 real test gaps that line coverage alone would not have caught.
 
 ### CI pipeline
 
