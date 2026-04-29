@@ -248,6 +248,8 @@ Click **Approve** in the dashboard (or say "yes" / "approve" if you're on a voic
 
 ## Testing
 
+> **CSDS 493 quality artifacts** — coverage report, mutation testing results, and CI pipeline details are documented in full in [testing.md](testing.md#advanced-quality-artifacts-csds-493).
+
 ```bash
 cd server
 python -m pytest -q                          # run all 474 tests
