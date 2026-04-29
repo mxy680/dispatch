@@ -129,21 +129,45 @@ TELEGRAM_SECRET_TOKEN=
 
 Fill in `web/.env.local` (copy from `web/.env.local.example`):
 
+```bash
+cp web/.env.local.example web/.env.local
+```
+
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-### 2. Run the backend
+### 2. Set up the Supabase database
+
+In your [Supabase dashboard](https://supabase.com/dashboard), open the **SQL Editor** and run the migration files in order:
+
+```
+supabase/migrations/20260319000000_initial_schema.sql
+supabase/migrations/20260319100000_init_schema.sql
+supabase/migrations/20260319200000_add_terminal_access.sql
+supabase/migrations/20260321000000_add_companion_tables.sql
+supabase/migrations/20260321100000_add_provider_columns.sql
+supabase/migrations/20260322000000_instances_project_agnostic.sql
+```
+
+Alternatively, if you have the [Supabase CLI](https://supabase.com/docs/guides/cli) installed:
+
+```bash
+supabase db push
+```
+
+### 3. Run the backend
 
 ```bash
 cd server
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### 3. Run the frontend
+### 4. Run the frontend
 
 ```bash
 cd web
@@ -153,7 +177,7 @@ npm run dev
 
 The dashboard is available at `http://localhost:3000`.
 
-### 4. Connect the local agent
+### 5. Connect the local agent
 
 The local agent daemon bridges the backend to your machine. Run it in the project directory you want to control:
 
@@ -164,7 +188,7 @@ python local-agent/dispatch_local_agent.py \
   --agent-token <token-from-dashboard-settings>
 ```
 
-The agent token is generated in the dashboard under Settings → Agents.
+The agent token is generated in the dashboard under **Settings → Agents → Create agent token**.
 
 ## Usage Example
 
