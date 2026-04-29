@@ -166,6 +166,44 @@ python local-agent/dispatch_local_agent.py \
 
 The agent token is generated in the dashboard under Settings → Agents.
 
+## Usage Example
+
+Once the backend, frontend, and local agent are all running:
+
+**1. Connect your local agent**
+
+```bash
+python local-agent/dispatch_local_agent.py \
+  --backend-url http://localhost:8000 \
+  --project-path /path/to/your/project \
+  --agent-token <token-from-settings>
+```
+
+**2. Issue a command**
+
+Open the dashboard at `http://localhost:3000`. In the Unified Command Center, type:
+
+```
+refactor the auth module to use async/await
+```
+
+Or call your Twilio number and speak it, or send it via Telegram.
+
+**3. Review the security classification**
+
+The AI Security Analyzer classifies the command. For the example above you'd see:
+
+```
+Risk: SAFE
+Reason: Code refactoring operation with no destructive or network side effects.
+```
+
+A command like `rm -rf /tmp/build` would show `HIGH_RISK` and require explicit UI confirmation — voice approval is blocked for high-risk commands.
+
+**4. Approve and watch it run**
+
+Click **Approve** in the dashboard (or say "yes" / "approve" if you're on a voice call). The local agent claims the command, runs `claude -p "refactor the auth module to use async/await"` in your project directory, and streams the output back line by line into the dashboard log viewer.
+
 ## Features
 
 **Unified Command Center** — Voice and typed input feed a single command timeline with real-time log streaming.

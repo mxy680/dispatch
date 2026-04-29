@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dispatch — Web Frontend
 
-## Getting Started
+Next.js 16 dashboard for the Dispatch voice and command orchestration platform.
 
-First, run the development server:
+## What it does
+
+- **Unified Command Center** — type or record voice commands that are dispatched to your local coding agent
+- **Real-time log streaming** — watch Claude/Cursor output stream into the dashboard as it runs
+- **AI security risk display** — every command shows its SAFE / WARNING / HIGH_RISK classification before execution
+- **Approval gate** — approve or reject pending commands from the UI
+- **Project and task management** — group commands by project with persistent history
+- **Settings** — configure provider (Claude/Cursor/shell), base project path, agent tokens, phone OTP
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16, React 19 |
+| Styling | Tailwind CSS v4, shadcn/ui, Radix UI |
+| Auth | Supabase Auth (Google OAuth) |
+| Database client | @supabase/supabase-js |
+| Testing | Vitest |
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.local.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Fill in `.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev        # development server at http://localhost:3000
+npm run build      # production build
+npm run test:run   # run Vitest tests
+```
 
-## Learn More
+## Folder structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+web/
+├── app/
+│   ├── auth/          # Supabase OAuth callback
+│   ├── dashboard/     # Main dashboard page
+│   └── login/         # Login page
+├── components/        # UI components (command center, log viewer, voice recorder, etc.)
+├── lib/
+│   ├── supabase/      # Supabase client utilities and token helpers
+│   └── voice/         # VAD loop, TTS, earcons
+└── test/              # Vitest setup
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Live deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+https://web-zeynepbastas-zeynepbastas-projects.vercel.app
