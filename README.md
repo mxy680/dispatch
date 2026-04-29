@@ -49,6 +49,35 @@ Dispatch lets developers control coding agents on their local machine by speakin
 6. Local agent daemon claims the command, executes it in the project directory, and streams logs back.
 7. Dashboard updates in real time with status and output.
 
+### Command lifecycle sequence
+
+```
+User            FastAPI Backend       Security Analyzer    Local Agent Daemon    Claude/Cursor CLI
+ │                    │                      │                     │                    │
+ │──voice/text──────▶│                      │                     │                    │
+ │                    │──parse intent───────▶│                     │                    │
+ │                    │   (Groq LLM)         │                     │                    │
+ │                    │◀─ intent JSON ───────│                     │                    │
+ │                    │                      │                     │                    │
+ │                    │──analyze command────▶│                     │                    │
+ │                    │                      │─ classify ─────────▶│                    │
+ │                    │◀─ SAFE/WARNING/──────│                     │                    │
+ │                    │   HIGH_RISK          │                     │                    │
+ │                    │                      │                     │                    │
+ │                    │── save command ──────────────────────────▶│                    │
+ │                    │   (pending_approval) │                     │                    │
+ │◀── dashboard ──────│                      │                     │                    │
+ │    shows command   │                      │                     │                    │
+ │                    │                      │                     │                    │
+ │──approve──────────▶│                      │                     │                    │
+ │  (voice/click)     │── set approved ──────────────────────────▶│                    │
+ │                    │                      │                     │                    │
+ │                    │                      │                     │──claim command─────▶│
+ │                    │                      │                     │──execute───────────▶│
+ │                    │                      │                     │◀─ stream logs ──────│
+ │◀── live logs ──────│◀─────────────────────────────────────────│                    │
+```
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -265,7 +294,7 @@ dispatch/
 | Mark Shteyn | Full-stack Lead | Project initialization; Next.js frontend (dashboard, bento grid, shadcn/ui); FastAPI server bootstrap; SQLite → Supabase Postgres migration; Groq integration; Twilio SMS OTP; real-time log streaming; agent command claiming and stale-command recovery |
 | Zeynep Baştaş | Testing, Backend & Project Coordination | Full pytest test suite (474 tests, 88% coverage); CI/CD GitHub Actions pipeline; mutation testing with mutmut; property-based testing with Hypothesis; rate limiting via slowapi; Twilio voice webhooks and call history; transcription error handling; Python 3.9 compatibility; Trello board setup and sprint tracking; TA communication and in-team coordination |
 | Paulo Aguiar | Integrations | Telegram bot (bulk implementation and webhook handler); local agent daemon; initial project structure and database schema for intent parsing and call logs |
-| Ali Nawaf | Security | AI security analyzer agent; various backend bug fixes and .gitignore maintenance |
+| Ali Nawaf | Security & Agent Features | AI security analyzer; approval gate for sensitive voice commands; terminal agent connections with tokens; centralized agent orchestration; coding agent support (Claude/Cursor); access token cache, settings, and danger zone UI; Electron companion app scaffold; file watcher; intent parsing; voice agent transcription integration |
 
 ## Retrospective
 
