@@ -178,6 +178,7 @@ async def analyze_command_security_with_fallback(
     user_prompt: str | None,
     normalized_command: str | None,
 ) -> dict[str, str]:
+    """Run LLM security analysis and fall back to heuristic if the LLM call fails."""
     try:
         return await analyze_command_security(
             user_prompt=user_prompt,
