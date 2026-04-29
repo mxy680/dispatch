@@ -156,7 +156,7 @@ The agent token is generated in the dashboard under Settings → Agents.
 
 ```bash
 cd server
-python -m pytest -q                          # run all 457 tests
+python -m pytest -q                          # run all 464 tests
 python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 ```
 
@@ -195,7 +195,7 @@ Key test files:
 
 ### Coverage
 
-Overall: **88%** across 457 tests — see `demo 4/coverage_report.txt` for the full breakdown.
+Overall: **88%** across 464 tests — see `demo 4/coverage_report.txt` for the full breakdown.
 
 Highlight modules:
 - `agents/command_builder.py` — 100%
@@ -241,11 +241,32 @@ dispatch/
 
 ## Team
 
-- Paulo Aguiar
-- Zeynep Baştaş
-- Mark Shteyn
-- Ali Nawaf
+| Member | Role | Key Contributions |
+|---|---|---|
+| Mark Shteyn | Full-stack Lead | Project initialization; Next.js frontend (dashboard, bento grid, shadcn/ui); FastAPI server bootstrap; SQLite → Supabase Postgres migration; Groq integration; Twilio SMS OTP; real-time log streaming; agent command claiming and stale-command recovery |
+| Zeynep Baştaş | Testing & Backend | Full pytest test suite (464 tests, 88% coverage); CI/CD GitHub Actions pipeline; mutation testing with mutmut; property-based testing with Hypothesis; rate limiting via slowapi; Twilio voice webhooks and call history; transcription error handling; Python 3.9 compatibility |
+| Paulo Aguiar | Integrations | Telegram bot (bulk implementation and webhook handler); local agent daemon; initial project structure and database schema for intent parsing and call logs |
+| Ali Nawaf | Security | AI security analyzer agent; various backend bug fixes and .gitignore maintenance |
+
+## Retrospective
+
+### What went well
+
+- **AI-assisted development** — Cursor handled frontend scaffolding and Claude Code handled test infrastructure, which cut boilerplate time significantly. Both tools were used with code review before merging.
+- **Security-first design** — The approval gate and AI security analyzer were built early, so every subsequent feature inherited those guarantees without retrofit work.
+- **Mutation testing payoff** — Running mutmut revealed 70 surviving mutants in the security analyzer that normal coverage metrics didn't surface. Closing 30% of those with targeted tests gave much higher confidence in the most critical module.
+- **Mock-based CI from day one** — The shared `conftest.py` Supabase mock let every contributor write and run tests without real credentials, and the GitHub Actions pipeline worked from the first commit.
+
+### What we would do differently
+
+- **Finalize the database schema earlier** — Mid-project schema changes required coordinating migrations across branches and occasionally blocked parallel work. A stable schema agreed on at week 2 would have removed integration friction.
+- **Add types to the backend up front** — Adding Pydantic return types and annotations to `models.py` retroactively was slower than writing them first. Full typing at initial implementation would have caught bugs at development time instead of test time.
+- **Invest in frontend tests in parallel with features** — Backend coverage is 88%; frontend Vitest coverage is lower. Writing component tests alongside features would have improved UI confidence throughout the project.
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-Built for CSDS 393 Software Engineering at Case Western Reserve University.
+Built for CSDS 393/493 Software Engineering at Case Western Reserve University.

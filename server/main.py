@@ -1,3 +1,16 @@
+"""FastAPI application for Dispatch — voice and typed command orchestration.
+
+Routes are organized into sections:
+  - /api/settings      — user preferences, provider, base path, OTP, agent tokens
+  - /api/device        — device pairing and project linking for local agents
+  - /api/voice         — Twilio voice webhooks, audio transcription
+  - /api/telegram      — Telegram bot webhook
+  - /api/dashboard     — user projects and call history
+  - /api/tasks         — task CRUD and agent dispatch
+  - /api/agent         — agent execution status
+  - /api/terminal      — terminal session and command management
+  - /api/unified       — unified command timeline and reply handling
+"""
 from __future__ import annotations
 import os
 import shutil

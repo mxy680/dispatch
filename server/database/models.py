@@ -55,6 +55,11 @@ def _now_iso() -> str:
 # ==================== USERS ====================
 
 def upsert_user(user_id: str, email: str, phone_number: str | None = None, telegram_chat_id: str | None = None):
+    """Insert or update a user record.
+
+    Creates the row if it does not exist; otherwise patches ``email``,
+    ``phone_number`` (if provided), and ``telegram_chat_id`` (if provided).
+    """
     sb = get_sb()
     # Check if user already exists — if so, just update.
     existing = _execute_single(sb.table("users").select("id").eq("id", user_id))
@@ -109,6 +114,7 @@ def get_user_phone_number(user_id: str) -> str | None:
 
 
 def get_user_by_id(user_id: str) -> dict | None:
+    """Return the full user row for ``user_id``, or ``None`` if not found."""
     sb = get_sb()
     return _execute_single(sb.table("users").select("*").eq("id", user_id))
 
@@ -116,6 +122,12 @@ def get_user_by_id(user_id: str) -> dict | None:
 # ==================== PROJECTS ====================
 
 def create_project(user_id, name, file_path=None):
+    """Create a new project and return its UUID string.
+
+    If ``file_path`` is omitted, a default path is computed from the user's
+    configured base path and the project name. Device-project links are also
+    created for any existing companion devices owned by the user.
+    """
     sb = get_sb()
     project_id = str(uuid.uuid4())
     if file_path is None:
@@ -137,6 +149,7 @@ def create_project(user_id, name, file_path=None):
 
 
 def touch_project(project_id: str):
+    """Update ``last_accessed`` to now for the given project."""
     sb = get_sb()
     sb.table("projects").update({"last_accessed": _now_iso()}).eq("id", project_id).execute()
     logger.debug("touch_project project_id=%s", project_id)
