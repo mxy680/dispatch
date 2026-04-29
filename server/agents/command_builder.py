@@ -7,6 +7,8 @@ Supported providers:
   - shell   → raw command passed through unchanged
 """
 
+from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
+
 import shlex
 import shutil
 
