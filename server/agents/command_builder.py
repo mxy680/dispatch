@@ -1,5 +1,3 @@
-from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
-
 """
 Build provider-specific CLI commands from a user prompt.
 

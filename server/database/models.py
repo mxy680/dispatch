@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 # server/database/models.py
 """Database operations via Supabase PostgREST client."""
+
+from __future__ import annotations
 from database.supabase_client import get_sb
 from database import sidecar_store as _sidecar
 import uuid

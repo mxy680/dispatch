@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 # server/services/llm.py
 """Intent parsing via Groq LLM API."""
+
+from __future__ import annotations
 
 import json
 import logging

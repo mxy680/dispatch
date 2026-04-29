@@ -1,3 +1,5 @@
+"""Telegram bot helpers — token validation, message sending, and typing indicator."""
+
 from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
 
 import os
