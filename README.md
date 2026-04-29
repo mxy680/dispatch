@@ -218,6 +218,21 @@ Highlight modules:
 
 All AI-generated code was reviewed and tested before merging.
 
+## API Documentation
+
+Auto-generated HTML documentation for all backend modules is in [`api-docs/`](api-docs/index.html). Open `api-docs/index.html` in a browser after cloning. Generated with [pdoc](https://pdoc.dev).
+
+To regenerate:
+
+```bash
+cd server
+pip install pdoc
+PYTHONPATH=. pdoc agents.command_builder agents.dispatcher agents.copilot_agent \
+  agents.prompt_refiner services.security_analyzer services.llm services.transcription \
+  services.phone_verification database.models database.sidecar_store main \
+  --output-dir ../api-docs
+```
+
 ## Project Structure
 
 ```
