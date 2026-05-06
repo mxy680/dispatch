@@ -2,6 +2,9 @@
 
 [![Tests](https://github.com/mxy680/dispatch/actions/workflows/test.yml/badge.svg)](https://github.com/mxy680/dispatch/actions/workflows/test.yml)
 
+**Live app:** https://web-zeynepbastas-zeynepbastas-projects.vercel.app  
+**API:** https://dispatch-api.fly.dev
+
 Voice and typed command orchestration for local coding agents.
 
 ## What is this?
@@ -45,6 +48,35 @@ Dispatch lets developers control coding agents on their local machine by speakin
 5. User approves (by speaking "yes", "approve", etc. or clicking in the UI).
 6. Local agent daemon claims the command, executes it in the project directory, and streams logs back.
 7. Dashboard updates in real time with status and output.
+
+### Command lifecycle sequence
+
+```
+User            FastAPI Backend       Security Analyzer    Local Agent Daemon    Claude/Cursor CLI
+ │                    │                      │                     │                    │
+ │──voice/text──────▶│                      │                     │                    │
+ │                    │──parse intent───────▶│                     │                    │
+ │                    │   (Groq LLM)         │                     │                    │
+ │                    │◀─ intent JSON ───────│                     │                    │
+ │                    │                      │                     │                    │
+ │                    │──analyze command────▶│                     │                    │
+ │                    │                      │─ classify ─────────▶│                    │
+ │                    │◀─ SAFE/WARNING/──────│                     │                    │
+ │                    │   HIGH_RISK          │                     │                    │
+ │                    │                      │                     │                    │
+ │                    │── save command ──────────────────────────▶│                    │
+ │                    │   (pending_approval) │                     │                    │
+ │◀── dashboard ──────│                      │                     │                    │
+ │    shows command   │                      │                     │                    │
+ │                    │                      │                     │                    │
+ │──approve──────────▶│                      │                     │                    │
+ │  (voice/click)     │── set approved ──────────────────────────▶│                    │
+ │                    │                      │                     │                    │
+ │                    │                      │                     │──claim command─────▶│
+ │                    │                      │                     │──execute───────────▶│
+ │                    │                      │                     │◀─ stream logs ──────│
+ │◀── live logs ──────│◀─────────────────────────────────────────│                    │
+```
 
 ## Tech Stack
 
@@ -97,21 +129,45 @@ TELEGRAM_SECRET_TOKEN=
 
 Fill in `web/.env.local` (copy from `web/.env.local.example`):
 
+```bash
+cp web/.env.local.example web/.env.local
+```
+
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-### 2. Run the backend
+### 2. Set up the Supabase database
+
+In your [Supabase dashboard](https://supabase.com/dashboard), open the **SQL Editor** and run the migration files in order:
+
+```
+supabase/migrations/20260319000000_initial_schema.sql
+supabase/migrations/20260319100000_init_schema.sql
+supabase/migrations/20260319200000_add_terminal_access.sql
+supabase/migrations/20260321000000_add_companion_tables.sql
+supabase/migrations/20260321100000_add_provider_columns.sql
+supabase/migrations/20260322000000_instances_project_agnostic.sql
+```
+
+Alternatively, if you have the [Supabase CLI](https://supabase.com/docs/guides/cli) installed:
+
+```bash
+supabase db push
+```
+
+### 3. Run the backend
 
 ```bash
 cd server
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### 3. Run the frontend
+### 4. Run the frontend
 
 ```bash
 cd web
@@ -121,7 +177,7 @@ npm run dev
 
 The dashboard is available at `http://localhost:3000`.
 
-### 4. Connect the local agent
+### 5. Connect the local agent
 
 The local agent daemon bridges the backend to your machine. Run it in the project directory you want to control:
 
@@ -132,7 +188,45 @@ python local-agent/dispatch_local_agent.py \
   --agent-token <token-from-dashboard-settings>
 ```
 
-The agent token is generated in the dashboard under Settings → Agents.
+The agent token is generated in the dashboard under **Settings → Agents → Create agent token**.
+
+## Usage Example
+
+Once the backend, frontend, and local agent are all running:
+
+**1. Connect your local agent**
+
+```bash
+python local-agent/dispatch_local_agent.py \
+  --backend-url http://localhost:8000 \
+  --project-path /path/to/your/project \
+  --agent-token <token-from-settings>
+```
+
+**2. Issue a command**
+
+Open the dashboard at `http://localhost:3000`. In the Unified Command Center, type:
+
+```
+refactor the auth module to use async/await
+```
+
+Or call your Twilio number and speak it, or send it via Telegram.
+
+**3. Review the security classification**
+
+The AI Security Analyzer classifies the command. For the example above you'd see:
+
+```
+Risk: SAFE
+Reason: Code refactoring operation with no destructive or network side effects.
+```
+
+A command like `rm -rf /tmp/build` would show `HIGH_RISK` and require explicit UI confirmation — voice approval is blocked for high-risk commands.
+
+**4. Approve and watch it run**
+
+Click **Approve** in the dashboard (or say "yes" / "approve" if you're on a voice call). The local agent claims the command, runs `claude -p "refactor the auth module to use async/await"` in your project directory, and streams the output back line by line into the dashboard log viewer.
 
 ## Features
 
@@ -154,9 +248,11 @@ The agent token is generated in the dashboard under Settings → Agents.
 
 ## Testing
 
+> **CSDS 493 quality artifacts** — coverage report, mutation testing results, and CI pipeline details are documented in full in [testing.md](testing.md#advanced-quality-artifacts-csds-493).
+
 ```bash
 cd server
-python -m pytest -q                          # run all 457 tests
+python -m pytest -q                          # run all 474 tests
 python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 ```
 
@@ -169,7 +265,7 @@ python -m pytest --cov=. --cov-report=term-missing  # with coverage report
 - `normalize_provider(s)` always returns one of `{cursor, claude, shell}`
 - `build_provider_command(provider, prompt)` always contains the prompt and required flags
 
-**3. Mutation testing** with `mutmut` was applied to `agents/command_builder.py` and `services/security_analyzer.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 49 (30% improvement). See `demo 4/mutation_report.txt`.
+**3. Mutation testing** with `mutmut` was applied to `agents/command_builder.py` and `services/security_analyzer.py`. Initial run found 70 surviving mutants in the security analyzer. Targeted tests reduced this to 2 (97% killed). The 2 remaining are equivalent mutants — the mutation produces identical observable behavior, making them impossible to kill without brittle tests. See `demo 4/mutation_report.txt`.
 
 ```bash
 cd server && mutmut run && mutmut results
@@ -195,7 +291,7 @@ Key test files:
 
 ### Coverage
 
-Overall: **88%** across 457 tests — see `demo 4/coverage_report.txt` for the full breakdown.
+Overall: **88%** across 474 tests — see `demo 4/coverage_report.txt` for the full breakdown.
 
 Highlight modules:
 - `agents/command_builder.py` — 100%
@@ -205,6 +301,7 @@ Highlight modules:
 - `services/security_analyzer.py` — 99%
 - `services/telegram.py` — 100%
 - `services/transcription.py` — 100%
+- `services/llm.py` — 97%
 - `services/phone_verification.py` — 95%
 - `database/sidecar_store.py` — 97%
 - `main.py` — 79%
@@ -217,6 +314,21 @@ Highlight modules:
 - **Claude Code** was used for test infrastructure work: diagnosing and fixing Python 3.9 compatibility issues across the codebase, building the conftest mock fixture, running and interpreting mutation testing results, and expanding the security analyzer test suite from 2 tests to 37 based on mutation findings.
 
 All AI-generated code was reviewed and tested before merging.
+
+## API Documentation
+
+Auto-generated HTML documentation for all backend modules is in [`api-docs/`](api-docs/index.html). Open `api-docs/index.html` in a browser after cloning. Generated with [pdoc](https://pdoc.dev).
+
+To regenerate:
+
+```bash
+cd server
+pip install pdoc
+PYTHONPATH=. pdoc agents.command_builder agents.dispatcher agents.copilot_agent \
+  agents.prompt_refiner services.security_analyzer services.llm services.transcription \
+  services.phone_verification database.models database.sidecar_store main \
+  --output-dir ../api-docs
+```
 
 ## Project Structure
 
@@ -241,11 +353,32 @@ dispatch/
 
 ## Team
 
-- Paulo Aguiar
-- Zeynep Baştaş
-- Mark Shteyn
-- Ali Nawaf
+| Member | Role | Key Contributions |
+|---|---|---|
+| Mark Shteyn | Full-stack Lead | Project initialization; Next.js frontend (dashboard, bento grid, shadcn/ui); FastAPI server bootstrap; SQLite → Supabase Postgres migration; Groq integration; Twilio SMS OTP; real-time log streaming; agent command claiming and stale-command recovery |
+| Zeynep Baştaş | Testing, Backend & Project Coordination | Full pytest test suite (474 tests, 88% coverage); CI/CD GitHub Actions pipeline; mutation testing with mutmut; property-based testing with Hypothesis; rate limiting via slowapi; Twilio voice webhooks, call history API and call history page (frontend); end-to-end Twilio voice pipeline debugging and verification; database API endpoints for projects and tasks; real-time dashboard polling; initial SQLite database setup and CRUD; transcription error handling; Python 3.9 compatibility; module-level and function-level docstrings across all 16 source files (services, agents, database); pdoc HTML API docs generation; project-wide documentation (README, testing.md, docstrings, pdoc API docs); Trello board setup and sprint tracking; TA communication and in-team coordination |
+| Paulo Aguiar | Integrations | Telegram bot (bulk implementation and webhook handler); local agent daemon; initial project structure and database schema for intent parsing and call logs |
+| Ali Nawaf | Security & Agent Features | AI security analyzer; approval gate for sensitive voice commands; terminal agent connections with tokens; centralized agent orchestration; coding agent support (Claude/Cursor); access token cache, settings, and danger zone UI; Electron companion app scaffold; file watcher; intent parsing; voice agent transcription integration |
+
+## Retrospective
+
+### What went well
+
+- **AI-assisted development** — Cursor handled frontend scaffolding and Claude Code handled test infrastructure, which cut boilerplate time significantly. Both tools were used with code review before merging.
+- **Security-first design** — The approval gate and AI security analyzer were built early, so every subsequent feature inherited those guarantees without retrofit work.
+- **Mutation testing payoff** — Running mutmut revealed 70 surviving mutants in the security analyzer that normal coverage metrics didn't surface. Targeted tests killed 68 of them (97%), leaving only 2 equivalent mutants that produce identical behavior and cannot be killed without brittle assertions. This gave far higher confidence in the most critical module than line coverage alone.
+- **Mock-based CI from day one** — The shared `conftest.py` Supabase mock let every contributor write and run tests without real credentials, and the GitHub Actions pipeline worked from the first commit.
+
+### What we would do differently
+
+- **Finalize the database schema earlier** — Mid-project schema changes required coordinating migrations across branches and occasionally blocked parallel work. A stable schema agreed on at week 2 would have removed integration friction.
+- **Add types to the backend up front** — Adding Pydantic return types and annotations to `models.py` retroactively was slower than writing them first. Full typing at initial implementation would have caught bugs at development time instead of test time.
+- **Invest in frontend tests in parallel with features** — Backend coverage is 88%; frontend Vitest coverage is lower. Writing component tests alongside features would have improved UI confidence throughout the project.
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-Built for CSDS 393 Software Engineering at Case Western Reserve University.
+Built for CSDS 393/493 Software Engineering at Case Western Reserve University.

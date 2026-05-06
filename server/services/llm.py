@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 # server/services/llm.py
 """Intent parsing via Groq LLM API."""
+
+from __future__ import annotations
 
 import json
 import logging
@@ -42,7 +42,19 @@ Structure:
 """
 
 
-async def parse_intent(text: str, projects: list):
+async def parse_intent(text: str, projects: list) -> dict:
+    """Parse a natural-language command into a structured intent object.
+
+    Sends the user text to Groq (llama-3.3-70b-versatile) with the list of
+    known project names as context. Returns a dict with keys:
+      - ``intent``: one of ``create_project``, ``create_task``, ``fix_bug``,
+        ``status_check``, ``unknown``, or ``error``.
+      - ``project_name``: matched project name or ``None``.
+      - ``task_description``: extracted task text or ``None``.
+      - ``parameters``: additional extracted parameters (may be empty).
+
+    On LLM failure, returns ``{"intent": "error", "message": "<details>"}``.
+    """
     project_names = [p['name'] for p in projects]
     context_str = f"Available Projects: {', '.join(project_names)}"
 

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Dispatch — API Documentation</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 760px; margin: 60px auto; padding: 0 24px; color: #1a1a1a; }
+    h1 { font-size: 1.8rem; margin-bottom: 4px; }
+    p.sub { color: #555; margin-top: 4px; margin-bottom: 40px; }
+    h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .08em; color: #888; border-bottom: 1px solid #e5e5e5; padding-bottom: 6px; margin-top: 36px; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+    li:last-child { border-bottom: none; }
+    a { text-decoration: none; color: #0066cc; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+    .desc { color: #555; font-size: .9rem; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Dispatch — API Documentation</h1>
+  <p class="sub">Generated with <a href="https://pdoc.dev">pdoc</a>. Source: <code>server/</code></p>
+
+  <h2>Application</h2>
+  <ul>
+    <li><a href="main.html">main</a><span class="desc">— FastAPI application entry point; all routes and dependency wiring</span></li>
+  </ul>
+
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="agents/dispatcher.html">agents.dispatcher</a><span class="desc">— Task dispatch pipeline; resolves intent → provider command → execution</span></li>
+    <li><a href="agents/command_builder.html">agents.command_builder</a><span class="desc">— Builds provider-specific CLI commands (cursor / claude / shell)</span></li>
+    <li><a href="agents/copilot_agent.html">agents.copilot_agent</a><span class="desc">— Copilot agent prompt construction and response parsing</span></li>
+    <li><a href="agents/prompt_refiner.html">agents.prompt_refiner</a><span class="desc">— Refines raw user prompts before agent dispatch</span></li>
+  </ul>
+
+  <h2>Services</h2>
+  <ul>
+    <li><a href="services/security_analyzer.html">services.security_analyzer</a><span class="desc">— LLM-based risk classification for terminal commands (SAFE / WARNING / HIGH_RISK)</span></li>
+    <li><a href="services/llm.html">services.llm</a><span class="desc">— Intent parsing via Groq LLM API</span></li>
+    <li><a href="services/transcription.html">services.transcription</a><span class="desc">— Speech-to-text via Groq Whisper API</span></li>
+    <li><a href="services/telegram.html">services.telegram</a><span class="desc">— Telegram bot helpers: token validation, message sending, typing indicator</span></li>
+    <li><a href="services/phone_verification.html">services.phone_verification</a><span class="desc">— Phone number verification via Twilio Verify API</span></li>
+  </ul>
+
+  <h2>Database</h2>
+  <ul>
+    <li><a href="database/models.html">database.models</a><span class="desc">— All Supabase PostgREST operations: users, projects, tasks, sessions, devices, tokens</span></li>
+    <li><a href="database/sidecar_store.html">database.sidecar_store</a><span class="desc">— SQLite sidecar store for conversation turns, dialogue state, and command risk records</span></li>
+  </ul>
+</body>
+</html>

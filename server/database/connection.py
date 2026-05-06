@@ -1,4 +1,6 @@
 # server/database/connection.py
+"""SQLite connection factory for the local sidecar store (dispatch.db)."""
+
 import sqlite3
 import os
 from pathlib import Path

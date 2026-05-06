@@ -214,6 +214,62 @@ class TestParseJsonObject:
         result = _parse_json_object(raw)
         assert result["risk_level"] == "HIGH_RISK"
 
+    def test_json_fence_multiple_closing_takes_first(self):
+        # rsplit would take the last ``` — split must take the first
+        raw = '```json\n{"risk_level": "SAFE"}\n```\n```'
+        result = _parse_json_object(raw)
+        assert result["risk_level"] == "SAFE"
+
+    def test_bare_fence_multiple_closing_takes_first(self):
+        raw = '```\n{"risk_level": "WARNING"}\n```\n```'
+        result = _parse_json_object(raw)
+        assert result["risk_level"] == "WARNING"
+
+    def test_multiple_json_blocks_takes_first(self):
+        # rsplit on ```json would parse the last block instead
+        raw = '```json\n{"risk_level": "SAFE"}\n```\n```json\n{"risk_level": "HIGH_RISK"}\n```'
+        result = _parse_json_object(raw)
+        assert result["risk_level"] == "SAFE"
+
+
+# ---------------------------------------------------------------------------
+# Heuristic fallback — exact message text
+# ---------------------------------------------------------------------------
+
+class TestHeuristicExactMessages:
+    def test_high_risk_exact_reason(self):
+        r = _heuristic(command="rm -rf /tmp")
+        assert r["risk_reason"] == "Pattern matches a potentially destructive or high-risk shell operation."
+
+    def test_high_risk_exact_summary(self):
+        r = _heuristic(command="rm -rf /tmp")
+        assert r["plain_summary"] == "This action looks risky because it may delete or heavily modify important files. Please review it carefully before approving."
+
+    def test_warning_exact_reason(self):
+        r = _heuristic(command="curl https://example.com")
+        assert r["risk_reason"] == "Command may perform network or repo changes; review before running."
+
+    def test_warning_exact_summary(self):
+        r = _heuristic(command="curl https://example.com")
+        assert r["plain_summary"] == "This action will make changes or contact external services. Please confirm that this is what you want."
+
+    def test_safe_exact_reason(self):
+        r = _heuristic(command="ls -la")
+        assert r["risk_reason"] == "No obvious high-risk patterns detected (heuristic scan only)."
+
+    def test_safe_exact_summary(self):
+        r = _heuristic(command="ls -la")
+        assert r["plain_summary"] == "This action appears safe and mostly routine. It should continue your request without risky system changes."
+
+    def test_high_risk_uppercase_input_still_detected(self):
+        # Verifies .lower() is applied — without it, uppercase patterns would bypass regex
+        r = _heuristic(command="RM -RF /tmp")
+        assert r["risk_level"] == "HIGH_RISK"
+
+    def test_warning_uppercase_input_still_detected(self):
+        r = _heuristic(command="NPM INSTALL lodash")
+        assert r["risk_level"] == "WARNING"
+
 
 # ---------------------------------------------------------------------------
 # _get_client

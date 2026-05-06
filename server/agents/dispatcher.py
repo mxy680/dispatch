@@ -23,11 +23,20 @@ logger = logging.getLogger("dispatch.dispatcher")
 def dispatch_task(task_id: str, intent_data: dict, terminal_granted: bool) -> dict:
     """Dispatch a task through the agent pipeline.
 
-    1. Look up the task and its project.
-    2. If terminal access is granted, build a provider command and queue it.
-    3. Track progress via agent_executions.
+    Looks up the task and its project, builds a provider CLI command if
+    terminal access is granted, and creates a ``terminal_commands`` row for
+    the local agent daemon to claim and execute.
 
-    Returns a summary dict with status and any created command_id.
+    Args:
+        task_id: UUID of the task row in Supabase.
+        intent_data: Parsed intent dict from the LLM, expected to contain
+            ``task_description`` and optionally ``project_name``.
+        terminal_granted: Whether the user has enabled terminal access in
+            their preferences.
+
+    Returns:
+        A dict with ``status`` (``"queued"``, ``"failed"``, or
+        ``"no_terminal"``) and ``command_id`` when a command was created.
     """
     start_ms = _now_ms()
 

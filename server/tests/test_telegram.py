@@ -1,3 +1,4 @@
+"""Unit tests for the Telegram webhook handler in main.py."""
 import pytest
 import asyncio
 import os

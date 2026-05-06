@@ -72,8 +72,20 @@ async def analyze_command_security(
     user_prompt: str | None,
     normalized_command: str | None,
 ) -> dict[str, str]:
-    """
-    Returns {"risk_level": "SAFE"|"WARNING"|"HIGH_RISK", "risk_reason": str, "plain_summary": str}.
+    """Classify the security risk of a proposed terminal or agent command.
+
+    Sends the command and its user-facing context to the Groq LLM and falls
+    back to heuristic pattern matching if the LLM call fails.
+
+    Args:
+        user_prompt: Original natural-language request from the user (may be
+            truncated to 4 000 characters). Used as context only.
+        normalized_command: The resolved CLI command string to be executed.
+
+    Returns:
+        A dict with keys ``risk_level`` (``"SAFE"``, ``"WARNING"``, or
+        ``"HIGH_RISK"``), ``risk_reason`` (one short sentence), and
+        ``plain_summary`` (two non-technical sentences for the user).
     """
     cmd = (normalized_command or "").strip() or "(empty)"
     prompt_ctx = (user_prompt or "").strip()[:4000]
@@ -166,6 +178,7 @@ async def analyze_command_security_with_fallback(
     user_prompt: str | None,
     normalized_command: str | None,
 ) -> dict[str, str]:
+    """Run LLM security analysis and fall back to heuristic if the LLM call fails."""
     try:
         return await analyze_command_security(
             user_prompt=user_prompt,

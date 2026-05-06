@@ -1,3 +1,4 @@
+"""Unit tests for unified command pipeline model functions in database/models.py."""
 from database import models
 from agents.command_builder import build_provider_command, normalize_provider
 

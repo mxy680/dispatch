@@ -1,3 +1,5 @@
+"""FastAPI router for the Telegram webhook — handles incoming bot messages and dispatches replies."""
+
 import logging
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse

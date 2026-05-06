@@ -1,5 +1,3 @@
-from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
-
 """
 Build provider-specific CLI commands from a user prompt.
 
@@ -8,6 +6,8 @@ Supported providers:
   - claude  → `claude -p "<prompt>"`
   - shell   → raw command passed through unchanged
 """
+
+from __future__ import annotations  # Python 3.9 compatibility: allows X | Y union syntax
 
 import shlex
 import shutil
